@@ -1,0 +1,35 @@
+
+
+	.macro BNZ
+		BNE \1
+	.endm
+	
+	.macro BEZ
+		BEQ \1
+	.endm
+	
+	.macro ADD
+		CLC
+		ADC \1
+	.endm
+	
+	.macro SUB
+		SEC
+		SBC \1
+	.endm
+	
+	.macro NEG
+		PHA
+		LDA \1
+		EOR #$FF
+		STA \1
+		PLA
+	.endm
+	
+	.macro ABS
+		BIT #%10000000
+		BEZ ABS_DONE@
+		EOR #$FF
+		ABS_DONE@:
+	.endm
+	

@@ -1,0 +1,69 @@
+;-
+; Everything related to interfacing with the PPU goes here
+;-
+
+	.rsset $0010
+ppu_fence .rs 1 ; 11
+
+InitPPUData:
+	LDA #$00
+	STA ppu_fence
+	RTS
+
+; Wait for the VBlamk
+VBlankWait:
+	BIT $2002
+	BPL VBlankWait
+	RTS
+	
+; Lock and wait for the PPU
+WaitForPPU:
+	LDA #$01
+	STA ppu_fence
+	LDA #$FF
+	WAIT_FOR_PPU_LOOP:
+		BIT ppu_fence
+		BNZ WAIT_FOR_PPU_LOOP
+	
+	RTS
+	
+; NMI interupt
+NMI:
+	; Save all of our register states, we'll need them when we return from the interupt
+	PHA
+	TXA
+	PHA
+	TYA
+	PHA
+
+	PPU_DMA:
+		LDA #SPRITE_DMA_REGION_LO
+		STA PPU_STATUS_REG  ; set the low byte (00) of the RAM address
+		LDA #SPRITE_DMA_REGION_HI
+		STA PPU_SPRITE_DMA  ; set the high byte (02) of the RAM address, start the transfer
+		
+	LDA #$FF
+	BIT ppu_fence
+	BNZ PPU_CLEANUP ; Fence wasn't set, just clean up the PPU
+		
+	
+	PPU_CLEANUP:
+		LDA #$00
+		STA ppu_fence ; We're done with the PPU submission, clear the fence and allow the game to continue
+	
+		; This is the PPU clean up section, so rendering the next frame starts properly.
+		LDA #%10010000   ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
+		STA $2000
+		LDA #%00011110   ; enable sprites, enable background, no clipping on left side
+		STA $2001
+		LDA #$00        ;;tell the ppu there is no background scrolling
+		STA $2005
+		STA $2005
+		
+	PLA
+	TAY
+	PLA
+	TAX
+	PLA
+	
+	RTI

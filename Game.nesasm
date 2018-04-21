@@ -1,0 +1,262 @@
+	.rsset $0020
+MAX_BALL_COUNT = 04
+	
+ballLeft   .rs MAX_BALL_COUNT ; 21
+ballRight  .rs MAX_BALL_COUNT ; 23
+ballUp     .rs MAX_BALL_COUNT ; 25
+ballDown   .rs MAX_BALL_COUNT ; 27
+
+ballX      .rs MAX_BALL_COUNT ; 29
+ballY      .rs MAX_BALL_COUNT ; 31
+
+activeBall .rs 1 ; 32
+
+ballSpriteLoad    .rs 1 ; 33
+ballSpriteValue   .rs 1 ; 34
+
+; Constants
+BALL_SPRITE_OFFSET = $10
+
+LEFT_BOUND         = $00
+RIGHT_BOUND        = $F0
+UP_BOUND           = $04
+DOWN_BOUND         = $D8
+
+X_SPEED            = $01
+Y_SPEED            = $02
+
+; Code
+MoveBallSprite:
+	LDX activeBall
+
+	LDA ballRight, X
+	BNZ MOVE_RIGHT
+	LDA ballLeft, X
+	BNZ MOVE_LEFT
+	JMP MOVE_HORIZONTAL_DONE
+	
+	MOVE_RIGHT:
+		LDA ballX, X
+		ADD #X_SPEED
+		STA ballX, X
+		
+		CMP #RIGHT_BOUND
+		BNE NO_RIGHT_FLIP
+			LDA #$01
+			STA ballLeft, X
+			LDA #$00
+			STA ballRight, X
+		NO_RIGHT_FLIP:
+		
+		JMP MOVE_HORIZONTAL_DONE
+	MOVE_RIGHT_DONE:
+	
+	MOVE_LEFT:
+		LDA ballX, X
+		SUB #X_SPEED
+		STA ballX, X
+		
+		CMP #LEFT_BOUND
+		BNE NO_LEFT_FLIP
+			LDA #$01
+			STA ballRight, X
+			LDA #$00
+			STA ballLeft, X
+		NO_LEFT_FLIP:
+	MOVE_LEFT_DONE:
+	
+	MOVE_HORIZONTAL_DONE:
+	
+	LDA ballUp, X
+	BNZ MOVE_UP
+	LDA ballDown, X
+	BNZ MOVE_DOWN
+	JMP MOVE_VERTICAL_DONE
+	
+	MOVE_UP:
+		LDA ballY, X
+		SUB #Y_SPEED
+		STA ballY, X
+		
+		CMP #UP_BOUND
+		BNE NO_UP_FLIP
+			LDA #$01
+			STA ballDown, X
+			LDA #$00
+			STA ballUp, X
+		NO_UP_FLIP:
+		
+		JMP MOVE_VERTICAL_DONE
+	MOVE_UP_DONE:
+	
+	MOVE_DOWN:
+		LDA ballY, X
+		ADD #Y_SPEED
+		STA ballY, X
+		
+		CMP #DOWN_BOUND
+		BNE NO_DOWN_FLIP
+			LDA #$01
+			STA ballUp, X
+			LDA #$00
+			STA ballDown, X
+		NO_DOWN_FLIP:
+	MOVE_DOWN_DONE:
+		
+	MOVE_VERTICAL_DONE:
+	
+	; Create the offset to the correct sprite (essentially a faked multiply)
+	TXA
+	TAY
+	LDA #$00
+	CREATE_OFFSET_LOOP:
+		ADD #$10
+		DEY
+		CPY #$00
+		BNZ CREATE_OFFSET_LOOP
+	TAY
+	
+	; Move the actual sprite
+	LDA ballY, X
+	STA $0200, Y
+	LDA ballX, X
+	STA $0203, Y
+	
+	LDA ballY, X
+	STA $0204, Y
+	LDA ballX, X
+	ADD #$08
+	STA $0207, Y
+	
+	LDA ballY, X
+	ADD #$08
+	STA $0208, Y
+	LDA ballX, X
+	STA $020B, Y
+		
+	LDA ballY, X
+	ADD #$08
+	STA $020C, Y
+	LDA ballX, X
+	ADD #$08
+	STA $020F, Y
+		
+	RTS
+
+OnGameInit:
+	; Load Palette
+	LDA PPU_STATUS_REG    ; read PPU status to reset the high/low latch
+	LDA #PPU_IMAGE_PALETTE_HI
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the high byte of $3F00 address
+	LDA #PPU_IMAGE_PALETTE_LO
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the low byte of $3F00 address
+	
+	LDX #$00
+	LOAD_PALETTE_LOOP:
+		LDA PALETTE_DATA, X
+		STA PPU_VIDEO_RAM_IO_REG               ; write to PPU
+		INX
+		CPX #$20
+		BNE LOAD_PALETTE_LOOP
+	
+	; Load Sprites
+	LDX #$00
+	LOAD_SPRITES_LOOP:
+		TXA
+		STA ballSpriteLoad
+	
+		LDA SPRITES, X
+		STA ballSpriteValue
+		
+		LDY #$00
+		SPRITE_TRANSFER_LOOP:
+		
+			TXA
+			PHA ; Store our current X index
+			
+			LDA ballSpriteLoad
+			TAX
+			
+			LDA ballSpriteValue
+			
+			STA SPRITE_DMA_REGION, X
+			
+			PLA ; Get the current X index
+			TAX
+			
+			
+			; Increment our offset
+			LDA ballSpriteLoad
+			ADD #$10
+			STA ballSpriteLoad
+		
+			INY
+			CPY #MAX_BALL_COUNT
+			BNE SPRITE_TRANSFER_LOOP
+		
+		INX
+		CPX #$10
+		BNE LOAD_SPRITES_LOOP
+		
+	
+	LDA #%10010000   ; enable NMI, sprites from Pattern Table 0
+	STA PPU_CONTROL_REG_1
+
+	LDA #%00011110 ; enable sprites, enable background
+	STA PPU_CONTROL_REG_2
+	
+	LDX #MAX_BALL_COUNT
+	BALL_MOVEMENT_LOOP:
+		DEX
+		
+		LDA #$01
+		STA ballRight, X
+		STA ballDown, X
+		
+		LDA #$00
+		STA ballLeft, X
+		STA ballUp, X
+		
+		LDA POSITIONS_X, X
+		STA ballX, X
+		LDA POSITIONS_Y, X
+		STA ballY, X
+		
+		BNZ BALL_MOVEMENT_LOOP
+
+	RTS
+	
+OnGameFrame:
+
+	LDX #MAX_BALL_COUNT
+	ALL_BALL_LOOP:
+		DEX
+		
+		STX activeBall
+		JSR MoveBallSprite
+		
+		CPX #$00
+		BNZ ALL_BALL_LOOP
+	
+	RTS
+
+;;;;;;;
+	.bank 1
+	.org $E000
+PALETTE_DATA:
+	.db $22,$29,$1A,$0F,  $22,$36,$17,$0F,  $22,$30,$21,$0F,  $22,$27,$17,$0F   ;;background palette
+	.db $22,$1C,$15,$14,  $22,$02,$38,$3C,  $22,$1C,$15,$14,  $22,$02,$38,$3C   ;;sprite palette
+	
+SPRITES:
+    ;   vert tile attr horiz
+	.db $80, $32, $00, $80   ;sprite 0
+	.db $80, $33, $00, $88   ;sprite 1
+	.db $88, $34, $00, $80   ;sprite 2
+	.db $88, $35, $00, $88   ;sprite 3
+	
+POSITIONS_X:
+	.db $80, $30, $05, $20
+
+POSITIONS_Y:
+	.db $80, $10, $A0, $30
+	
