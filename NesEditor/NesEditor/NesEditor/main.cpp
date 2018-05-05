@@ -203,25 +203,27 @@ MIST_WIN_PROC()
 {
 	// Config
 	const bool  winConfig_IsFullscreen = false;
-	const uint32_t   winConfig_Width        = 900;
-	const uint32_t   winConfig_Height       = 700;
-	const char* winConfig_WindowName   = "Mist Vulkan";
+	const uint32_t   winConfig_Width = 900;
+	const uint32_t   winConfig_Height = 700;
+	const char* winConfig_WindowName = "Mist Vulkan";
 
-	const char* vkConfig_AppName    = "NesEditor";
+	const char* vkConfig_AppName = "NesEditor";
 	const char* vkConfig_EngineName = "Mist";
 
-	const bool  vkConfig_EnableDebugExtensions  = true;
+	const bool  vkConfig_EnableDebugExtensions = true;
 	const bool  vkConfig_EnableValidationLayers = true;
 
-	const char* vkConfig_InstanceExtensions[]      = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
-	const char* vkConfig_InstanceDebugExtensions[] = { VK_EXT_DEBUG_REPORT_EXTENSION_NAME };
-	const uint32_t   vkConfig_MaxInstanceExtensions     = ARRAYSIZE(vkConfig_InstanceExtensions) + ARRAYSIZE(vkConfig_InstanceDebugExtensions);
+	const char*      vkConfig_InstanceExtensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
+	const char*      vkConfig_InstanceDebugExtensions[] = { VK_EXT_DEBUG_REPORT_EXTENSION_NAME };
+	const uint32_t   vkConfig_MaxInstanceExtensions = ARRAYSIZE(vkConfig_InstanceExtensions) + ARRAYSIZE(vkConfig_InstanceDebugExtensions);
 
-	const char* vkConfig_DeviceExtensions[]  = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
+	const char*      vkConfig_DeviceExtensions[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME };
 	const uint32_t   vkConfig_MaxDeviceExtensions = ARRAYSIZE(vkConfig_DeviceExtensions);
 
-	const char* vkConfig_ValidationLayers[]  = { "VK_LAYER_LUNARG_standard_validation" };
+	const char*      vkConfig_ValidationLayers[] = { "VK_LAYER_LUNARG_standard_validation" };
 	const uint32_t   vkConfig_MaxValidationLayers = ARRAYSIZE(vkConfig_ValidationLayers);
+
+	const uint32_t   vkConfig_BufferCount = 2;
 
 	HWND vulkanWindow = mist_CreateWindow(winConfig_WindowName, winConfig_IsFullscreen, winConfig_Width, winConfig_Height, mist_WinInstance, WndProc);
 
@@ -288,7 +290,7 @@ MIST_WIN_PROC()
 	createInfo.ppEnabledExtensionNames = instanceExtensions;
 	createInfo.enabledLayerCount = validationLayerCount;
 	createInfo.ppEnabledLayerNames = validationLayers;
-	
+
 	VkInstance vkInstance;
 	VkResult instanceCreated = vkCreateInstance(&createInfo, NO_ALLOCATOR, &vkInstance);
 	if (VK_SUCCESS != instanceCreated)
@@ -455,20 +457,217 @@ MIST_WIN_PROC()
 	mist_Print("Enumerating device properties done!");
 
 	mist_Print("Selecting best physical device...");
+	GPU* selectedGPU = nullptr;
+	int32_t selectedGraphicsQueue = -1;
+	int32_t selectedPresentQueue = -1;
+
 	{
 		for (uint32_t i = 0; i < gpuCount; i++)
 		{
 			GPU* gpu = &GPUs[i];
 
 			int32_t graphicsQueue = -1;
-			int32_t presentQueu = -1;
+			int32_t presentQueue = -1;
 
-			// TODO: keep working
+			if (0 == gpu->queuePropertyCount)
+			{
+				continue;
+			}
+
+			if (0 == gpu->presentModeCount)
+			{
+				continue;
+			}
+
+			for (uint32_t fIdx = 0; fIdx < gpu->queuePropertyCount; fIdx++)
+			{
+				if (gpu->queueProperties[fIdx].queueCount == 0)
+				{
+					continue;
+				}
+
+				if (gpu->queueProperties[fIdx].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+				{
+					graphicsQueue = (int32_t)fIdx;
+					break;
+				}
+			}
+
+			for (uint32_t fIdx = 0; fIdx < gpu->queuePropertyCount; fIdx++)
+			{
+				if (gpu->queueProperties[fIdx].queueCount == 0)
+				{
+					continue;
+				}
+
+				VkBool32 supportsPresent = VK_FALSE;
+				VkResult supportCall = vkGetPhysicalDeviceSurfaceSupportKHR(gpu->device, fIdx, vkSurface, &supportsPresent);
+				if (VK_SUCCESS != supportCall)
+				{
+					mist_Print("Failed to check if the physical device supports KHR!");
+					continue;
+				}
+
+				if (supportsPresent)
+				{
+					presentQueue = (int32_t)fIdx;
+					break;
+				}
+			}
+
+			// Did we find a device supporting both graphics and present.
+			if (graphicsQueue >= 0 && presentQueue >= 0)
+			{
+				selectedGraphicsQueue = graphicsQueue;
+				selectedPresentQueue = presentQueue;
+				selectedGPU = gpu;
+			}
 		}
+	}
+
+	if (nullptr == selectedGPU)
+	{
+		mist_Print("Failed to select a physical device!");
+		return -1;
 	}
 	mist_Print("Best physical device selected!");
 
+	mist_Print("Creating logical device...");
+	VkDeviceQueueCreateInfo queueCreateInfo[2] = {};
+	int queueCreateInfoCount = 0;
 
+	const float graphicsQueuePriority = 1.0f;
+
+	VkDeviceQueueCreateInfo createGraphicsQueue = {};
+	createGraphicsQueue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+	createGraphicsQueue.queueFamilyIndex = selectedGraphicsQueue;
+	createGraphicsQueue.queueCount = 1;
+	createGraphicsQueue.pQueuePriorities = &graphicsQueuePriority;
+	queueCreateInfo[queueCreateInfoCount] = createGraphicsQueue;
+	queueCreateInfoCount++;
+
+	if (selectedGraphicsQueue != selectedPresentQueue)
+	{
+		const float presentQueuePriority = 1.0f;
+
+		VkDeviceQueueCreateInfo createPresentQueue = {};
+		createPresentQueue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+		createPresentQueue.queueFamilyIndex = selectedPresentQueue;
+		createPresentQueue.queueCount = 1;
+		createPresentQueue.pQueuePriorities = &presentQueuePriority;
+		queueCreateInfo[queueCreateInfoCount] = createGraphicsQueue;
+		queueCreateInfoCount++;
+	}
+
+	VkPhysicalDeviceFeatures physicalDeviceFeatures = {};
+
+	VkDeviceCreateInfo deviceCreateInfo = {};
+	deviceCreateInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+	deviceCreateInfo.queueCreateInfoCount = queueCreateInfoCount;
+	deviceCreateInfo.pQueueCreateInfos = queueCreateInfo;
+	deviceCreateInfo.pEnabledFeatures = &physicalDeviceFeatures;
+	deviceCreateInfo.enabledExtensionCount = vkConfig_MaxDeviceExtensions;
+	deviceCreateInfo.ppEnabledExtensionNames = vkConfig_DeviceExtensions;
+
+	if (vkConfig_EnableValidationLayers)
+	{
+		deviceCreateInfo.enabledLayerCount = validationLayerCount;
+		deviceCreateInfo.ppEnabledLayerNames = validationLayers;
+	}
+	else
+	{
+		deviceCreateInfo.enabledLayerCount = 0;
+	}
+
+	VkDevice vkDevice = {};
+	VkQueue graphicsQueue = {};
+	VkQueue presentQueue = {};
+
+	VkResult createdLogicalDevice = vkCreateDevice(selectedGPU->device, &deviceCreateInfo, NO_ALLOCATOR, &vkDevice);
+	if (VK_SUCCESS != createdLogicalDevice)
+	{
+		mist_Print("Failed to create a logical device!");
+		return -1;
+	}
+
+	vkGetDeviceQueue(vkDevice, selectedGraphicsQueue, 0, &graphicsQueue);
+	vkGetDeviceQueue(vkDevice, selectedPresentQueue, 0, &presentQueue);
+	mist_Print("Created logical device!");
+
+	mist_Print("Creating Semaphores...");
+	VkSemaphoreCreateInfo semaphoreCreateInfo = {};
+	semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+	VkSemaphore acquireSemaphores[vkConfig_BufferCount] = {};
+	VkSemaphore frameCompleteSemaphores[vkConfig_BufferCount] = {};
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		VkResult acquireSemaphoreCreation = vkCreateSemaphore(vkDevice, &semaphoreCreateInfo, NO_ALLOCATOR, &acquireSemaphores[i]);
+		if (VK_SUCCESS != acquireSemaphoreCreation)
+		{
+			mist_Print("Failed to create an acquire semaphore!");
+			return -1;
+		}
+
+		VkResult frameSemaphoreCreation = vkCreateSemaphore(vkDevice, &semaphoreCreateInfo, NO_ALLOCATOR, &frameCompleteSemaphores[i]);
+		if (VK_SUCCESS != frameSemaphoreCreation)
+		{
+			mist_Print("Failed to create a frame semaphore!");
+			return -1;
+		}
+	}
+	mist_Print("Created Semaphores!");
+
+	mist_Print("Creating command buffers...");
+	VkCommandPool graphicsCommandPool = {};
+
+	VkCommandPoolCreateInfo commandPoolCreateInfo = {};
+	commandPoolCreateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+	commandPoolCreateInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+	commandPoolCreateInfo.queueFamilyIndex = selectedGraphicsQueue;
+
+	VkResult createdCommandPool = vkCreateCommandPool(vkDevice, &commandPoolCreateInfo, NO_ALLOCATOR, &graphicsCommandPool);
+	if (VK_SUCCESS != createdCommandPool)
+	{
+		mist_Print("Failed to create the command pool!");
+		return -1;
+	}
+
+	VkCommandBuffer graphicsCommandBuffers[vkConfig_BufferCount] = {};
+
+	VkCommandBufferAllocateInfo commandBufferAllocateInfo = {};
+	commandBufferAllocateInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+	commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+	commandBufferAllocateInfo.commandPool = graphicsCommandPool;
+	commandBufferAllocateInfo.commandBufferCount = vkConfig_BufferCount;
+
+	VkResult allocatedCommandBuffer = vkAllocateCommandBuffers(vkDevice, &commandBufferAllocateInfo, graphicsCommandBuffers);
+	if (VK_SUCCESS != allocatedCommandBuffer)
+	{
+		mist_Print("Failed to allocate the command buffer!");
+		return -1;
+	}
+	mist_Print("Created command buffers!");
+
+	mist_Print("Creating fences...");
+	VkFence graphicsFences[vkConfig_BufferCount] = {};
+
+	VkFenceCreateInfo fenceCreateInfo = {};
+	fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		VkResult createdFence = vkCreateFence(vkDevice, &fenceCreateInfo, NO_ALLOCATOR, &graphicsFences[i]);
+		if (VK_SUCCESS != createdFence)
+		{
+			mist_Print("Failed to create fence!");
+			return -1;
+		}
+	}
+	mist_Print("Created fences!");
+
+	mist_Print("Creating a swapchain...");
+	// TODO: Keep working here!
+	mist_Print("Created a swapchain!");
 
 	// Game stuff woo!
 	MSG msg;
