@@ -1,6 +1,7 @@
 
 // Standard lib
 #include <stdio.h>
+#include <assert.h>
 
 // Platform
 #include <Windows.h>
@@ -183,8 +184,25 @@ struct mist_ScopedMemory
 
 	~mist_ScopedMemory()
 	{
+		if (data != nullptr)
+		{
+			memset(data, 0, sizeof(Type));
+		}
 		free(data);
+		data = nullptr;
 	}
+
+	mist_ScopedMemory& operator=(Type* mem)
+	{
+		assert(data == nullptr);
+		data = mem;
+		return *this;
+	}
+
+	mist_ScopedMemory(mist_ScopedMemory const&) = delete;
+	mist_ScopedMemory& operator=(mist_ScopedMemory const&) = delete;
+	mist_ScopedMemory(mist_ScopedMemory&& rhs) = delete;
+	mist_ScopedMemory& operator=(mist_ScopedMemory&& rhs) = delete;
 
 	Type* operator->()
 	{
@@ -372,10 +390,9 @@ MIST_WIN_PROC()
 	memset(GPUs, 0, sizeof(GPU) * physicalDeviceCount);
 	const uint32_t gpuCount = physicalDeviceCount;
 
+	mist_ScopedMemory<VkPhysicalDevice> physicalDevices = (VkPhysicalDevice*)malloc(sizeof(VkPhysicalDevice) * physicalDeviceCount);
 	mist_Print("Enumerating device properties...");
 	{
-		mist_ScopedMemory<VkPhysicalDevice> physicalDevices = (VkPhysicalDevice*)malloc(sizeof(VkPhysicalDevice) * physicalDeviceCount);
-
 		VkResult physicalDeviceSuccess = vkEnumeratePhysicalDevices(vkInstance, &physicalDeviceCount, physicalDevices);
 		if (VK_SUCCESS != physicalDeviceSuccess)
 		{
@@ -446,7 +463,7 @@ MIST_WIN_PROC()
 			VkResult presentModeResult = vkGetPhysicalDeviceSurfacePresentModesKHR(GPUs[i].device, vkSurface, &GPUs[i].presentModeCount, GPUs[i].presentModes);
 			if (VK_SUCCESS != presentModeResult || 0 == GPUs[i].presentModeCount)
 			{
-				mist_Print("Error: Surface has no surface formats!");
+				mist_Print("Error: Surface has no present modes!");
 			}
 
 
@@ -504,7 +521,7 @@ MIST_WIN_PROC()
 				VkResult supportCall = vkGetPhysicalDeviceSurfaceSupportKHR(gpu->device, fIdx, vkSurface, &supportsPresent);
 				if (VK_SUCCESS != supportCall)
 				{
-					mist_Print("Failed to check if the physical device supports KHR!");
+					mist_Print("Error: Failed to check if the physical device supports KHR!");
 					continue;
 				}
 
@@ -521,13 +538,14 @@ MIST_WIN_PROC()
 				selectedGraphicsQueue = graphicsQueue;
 				selectedPresentQueue = presentQueue;
 				selectedGPU = gpu;
+				break;
 			}
 		}
 	}
 
 	if (nullptr == selectedGPU)
 	{
-		mist_Print("Failed to select a physical device!");
+		mist_Print("Error: Failed to select a physical device!");
 		return -1;
 	}
 	mist_Print("Best physical device selected!");
@@ -536,7 +554,7 @@ MIST_WIN_PROC()
 	VkDeviceQueueCreateInfo queueCreateInfo[2] = {};
 	int queueCreateInfoCount = 0;
 
-	const float graphicsQueuePriority = 1.0f;
+	static const float graphicsQueuePriority = 1.0f;
 
 	VkDeviceQueueCreateInfo createGraphicsQueue = {};
 	createGraphicsQueue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -548,7 +566,7 @@ MIST_WIN_PROC()
 
 	if (selectedGraphicsQueue != selectedPresentQueue)
 	{
-		const float presentQueuePriority = 1.0f;
+		static const float presentQueuePriority = 1.0f;
 
 		VkDeviceQueueCreateInfo createPresentQueue = {};
 		createPresentQueue.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
@@ -579,14 +597,14 @@ MIST_WIN_PROC()
 		deviceCreateInfo.enabledLayerCount = 0;
 	}
 
-	VkDevice vkDevice = {};
+	VkDevice vkDevice;
 	VkQueue graphicsQueue = {};
 	VkQueue presentQueue = {};
 
 	VkResult createdLogicalDevice = vkCreateDevice(selectedGPU->device, &deviceCreateInfo, NO_ALLOCATOR, &vkDevice);
 	if (VK_SUCCESS != createdLogicalDevice)
 	{
-		mist_Print("Failed to create a logical device!");
+		mist_Print("Error: Failed to create a logical device!");
 		return -1;
 	}
 
@@ -605,14 +623,14 @@ MIST_WIN_PROC()
 		VkResult acquireSemaphoreCreation = vkCreateSemaphore(vkDevice, &semaphoreCreateInfo, NO_ALLOCATOR, &acquireSemaphores[i]);
 		if (VK_SUCCESS != acquireSemaphoreCreation)
 		{
-			mist_Print("Failed to create an acquire semaphore!");
+			mist_Print("Error: Failed to create an acquire semaphore!");
 			return -1;
 		}
 
 		VkResult frameSemaphoreCreation = vkCreateSemaphore(vkDevice, &semaphoreCreateInfo, NO_ALLOCATOR, &frameCompleteSemaphores[i]);
 		if (VK_SUCCESS != frameSemaphoreCreation)
 		{
-			mist_Print("Failed to create a frame semaphore!");
+			mist_Print("Error: Failed to create a frame semaphore!");
 			return -1;
 		}
 	}
@@ -629,7 +647,7 @@ MIST_WIN_PROC()
 	VkResult createdCommandPool = vkCreateCommandPool(vkDevice, &commandPoolCreateInfo, NO_ALLOCATOR, &graphicsCommandPool);
 	if (VK_SUCCESS != createdCommandPool)
 	{
-		mist_Print("Failed to create the command pool!");
+		mist_Print("Error: Failed to create the command pool!");
 		return -1;
 	}
 
@@ -644,7 +662,7 @@ MIST_WIN_PROC()
 	VkResult allocatedCommandBuffer = vkAllocateCommandBuffers(vkDevice, &commandBufferAllocateInfo, graphicsCommandBuffers);
 	if (VK_SUCCESS != allocatedCommandBuffer)
 	{
-		mist_Print("Failed to allocate the command buffer!");
+		mist_Print("Error: Failed to allocate the command buffer!");
 		return -1;
 	}
 	mist_Print("Created command buffers!");
@@ -659,15 +677,267 @@ MIST_WIN_PROC()
 		VkResult createdFence = vkCreateFence(vkDevice, &fenceCreateInfo, NO_ALLOCATOR, &graphicsFences[i]);
 		if (VK_SUCCESS != createdFence)
 		{
-			mist_Print("Failed to create fence!");
+			mist_Print("Error: Failed to create fence!");
 			return -1;
 		}
 	}
 	mist_Print("Created fences!");
 
 	mist_Print("Creating a swapchain...");
-	// TODO: Keep working here!
+
+	mist_Print("Selecting surface format...");
+	if (0 == selectedGPU->surfaceFormatCount)
+	{
+		mist_Print("Error: No surface formats available!");
+		return -1;
+	}
+
+	VkSurfaceFormatKHR surfaceFormat = {};
+	if (1 == selectedGPU->surfaceFormatCount && VK_FORMAT_UNDEFINED == selectedGPU->surfaceFormats[0].format)
+	{
+		surfaceFormat.format = VK_FORMAT_B8G8R8A8_UNORM;
+		surfaceFormat.colorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+	}
+	else
+	{
+		surfaceFormat = selectedGPU->surfaceFormats[0];
+		for (uint32_t i = 0; i < selectedGPU->surfaceFormatCount; i++)
+		{
+			if (VK_FORMAT_B8G8R8A8_UNORM == selectedGPU->surfaceFormats[i].format && VK_COLORSPACE_SRGB_NONLINEAR_KHR == selectedGPU->surfaceFormats[i].colorSpace)
+			{
+				surfaceFormat = selectedGPU->surfaceFormats[i];
+				break;
+			}
+		}
+	}
+	mist_Print("Selected surface format!");
+
+	mist_Print("Selecting present mode...");
+	VkPresentModeKHR presentMode = VK_PRESENT_MODE_FIFO_KHR;
+	for (uint32_t i = 0; i < selectedGPU->presentModeCount; i++)
+	{
+		if (VK_PRESENT_MODE_MAILBOX_KHR == selectedGPU->presentModes[i])
+		{
+			presentMode = VK_PRESENT_MODE_MAILBOX_KHR;
+			break;
+		}
+	}
+	mist_Print("Selected present mode!");
+
+	mist_Print("Selecting surface extents...");
+	VkSurfaceCapabilitiesKHR const& surfaceCapabilities = selectedGPU->surfaceCapabilities;
+	VkExtent2D surfaceExtents = {};
+
+	if (-1 == surfaceCapabilities.currentExtent.width)
+	{
+		surfaceExtents.width = winConfig_Width;
+		surfaceExtents.height = winConfig_Height;
+	}
+	else
+	{
+		surfaceExtents = surfaceCapabilities.currentExtent;
+	}
+	mist_Print("Selected surface extents!");
+
+	VkSwapchainCreateInfoKHR swapchainCreate = {};
+	swapchainCreate.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+	swapchainCreate.surface = vkSurface;
+
+	swapchainCreate.minImageCount = vkConfig_BufferCount;
+
+	swapchainCreate.imageFormat = surfaceFormat.format;
+	swapchainCreate.imageColorSpace = surfaceFormat.colorSpace;
+	swapchainCreate.imageExtent = surfaceExtents;
+	swapchainCreate.imageArrayLayers = 1;
+
+	swapchainCreate.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+	uint32_t swapchainShareIndices[2];
+	if (selectedGraphicsQueue != selectedPresentQueue)
+	{
+		swapchainShareIndices[0] = selectedGraphicsQueue;
+		swapchainShareIndices[1] = selectedPresentQueue;
+
+		swapchainCreate.imageSharingMode = VK_SHARING_MODE_CONCURRENT;
+		swapchainCreate.queueFamilyIndexCount = 2;
+		swapchainCreate.pQueueFamilyIndices = swapchainShareIndices;
+	}
+	else
+	{
+		swapchainCreate.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	}
+
+	swapchainCreate.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+	swapchainCreate.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+	swapchainCreate.presentMode = presentMode;
+
+	swapchainCreate.clipped = VK_TRUE;
+
+	VkSwapchainKHR vkSwapchain;
+	VkResult createdSwapchain = vkCreateSwapchainKHR(vkDevice, &swapchainCreate, NO_ALLOCATOR, &vkSwapchain);
+	if (VK_SUCCESS != createdSwapchain)
+	{
+		mist_Print("Error: Failed to create swapchain!");
+		return -1;
+	}
 	mist_Print("Created a swapchain!");
+
+	mist_Print("Retrieving swapchain images...");
+	uint32_t imageCount = 0;
+
+	VkResult retrieveImageCount = vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &imageCount, nullptr);
+	if (VK_SUCCESS != retrieveImageCount)
+	{
+		mist_Print("Error: Failed to retrieve the image count from the swapchain!");
+		return -1;
+	}
+
+	mist_ScopedMemory<VkImage> swapchainPhysicalImages = (VkImage*)malloc(sizeof(VkImage) * imageCount);
+	VkResult retrieveSwapchainImages = vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &imageCount, swapchainPhysicalImages);
+	if (VK_SUCCESS != retrieveSwapchainImages)
+	{
+		mist_Print("Error: Failed to retrieve the images from the swapchain!");
+		return -1;
+	}
+
+	if (vkConfig_BufferCount > imageCount)
+	{
+		mist_Print("Error: Not enough images retrieved from the swapchain!");
+		return -1;
+	}
+	VkImageView swapchainImages[vkConfig_BufferCount] = {};
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		VkImageViewCreateInfo imageViewCreate = {};
+		imageViewCreate.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		imageViewCreate.image = swapchainPhysicalImages[i];
+		imageViewCreate.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		imageViewCreate.format = surfaceFormat.format;
+
+		imageViewCreate.components.r = VK_COMPONENT_SWIZZLE_R;
+		imageViewCreate.components.g = VK_COMPONENT_SWIZZLE_G;
+		imageViewCreate.components.b = VK_COMPONENT_SWIZZLE_B;
+		imageViewCreate.components.a = VK_COMPONENT_SWIZZLE_A;
+
+		imageViewCreate.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		imageViewCreate.subresourceRange.baseMipLevel = 0;
+		imageViewCreate.subresourceRange.levelCount = 1;
+		imageViewCreate.subresourceRange.baseArrayLayer = 0;
+		imageViewCreate.subresourceRange.layerCount = 1;
+
+		VkResult createdImageView = vkCreateImageView(vkDevice, &imageViewCreate, NO_ALLOCATOR, &swapchainImages[i]);
+		if (VK_SUCCESS != createdImageView)
+		{
+			mist_Print("Error: Failed to create an image view!");
+			return -1;
+		}
+	}
+	mist_Print("Retrieved swapchain images!");
+
+	// TODO: Add depth when we need it.
+	//mist_Print("Selecting depth format...");
+	//const VkFormat preferedFormats[] = { VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT };
+	//const VkFormatFeatureFlags preferedFeatures = VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+
+	//VkFormat selectedDepthFormat = VK_FORMAT_UNDEFINED;
+	//for (uint32_t i = 0; i < ARRAYSIZE(preferedFormats); i++)
+	//{
+	//	VkFormatProperties formatProperties;
+	//	vkGetPhysicalDeviceFormatProperties(selectedGPU->device, preferedFormats[i], &formatProperties);
+
+	//	if ((formatProperties.optimalTilingFeatures & preferedFeatures) == preferedFeatures)
+	//	{
+	//		selectedDepthFormat = preferedFormats[i];
+	//		break;
+	//	}
+
+	//	/*TODO: Actually create the image*/
+	//}
+	//mist_Print("Selected depth format!");
+
+	mist_Print("Creating render pass...");
+
+	VkAttachmentDescription renderPassAttachments[1];
+
+	VkAttachmentDescription colorAttachment = {};
+	colorAttachment.format = surfaceFormat.format;
+	colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+	renderPassAttachments[0] = colorAttachment;
+
+	// TODO: Add depth when we can create images
+	/*VkAttachmentDescription depthAttachment = {};
+	depthAttachment.format = selectedDepthFormat;
+	depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+	depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+	depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+	depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+	renderPassAttachments[1] = depthAttachment;*/
+
+	VkAttachmentReference colorReference = {};
+	colorReference.attachment = 0;
+	colorReference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+	// TODO: depth
+	/*VkAttachmentReference depthReference = {};
+	depthReference.attachment = 1;
+	depthReference.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;*/
+
+	VkSubpassDescription subpass = {};
+	subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+	subpass.colorAttachmentCount = 1;
+	subpass.pColorAttachments = &colorReference;
+	// subpass.pDepthStencilAttachment = &depthReference; // TODO: depth
+
+	VkRenderPassCreateInfo createRenderPass = {};
+	createRenderPass.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+	createRenderPass.attachmentCount = ARRAYSIZE(renderPassAttachments);
+	createRenderPass.pAttachments = renderPassAttachments;
+	createRenderPass.subpassCount = 1;
+	createRenderPass.pSubpasses = &subpass;
+	createRenderPass.dependencyCount = 0;
+
+	VkRenderPass vkRenderPass;
+	VkResult renderPassCreated = vkCreateRenderPass(vkDevice, &createRenderPass, NO_ALLOCATOR, &vkRenderPass);
+	if (VK_SUCCESS != renderPassCreated)
+	{
+		mist_Print("Error: Failed to create a render pass!");
+		return -1;
+	}
+	mist_Print("Created render pass!");
+
+	mist_Print("Creating framebuffers...");
+	VkImageView attachments[1];
+
+	// TODO: Add support for depth images
+	// attachments[1] = depthImageView;
+
+	VkFramebufferCreateInfo framebufferCreate = {};
+	framebufferCreate.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+	framebufferCreate.renderPass = vkRenderPass;
+	framebufferCreate.attachmentCount = ARRAYSIZE(attachments);
+	framebufferCreate.pAttachments = attachments;
+	framebufferCreate.width = winConfig_Width;
+	framebufferCreate.height = winConfig_Height;
+	framebufferCreate.layers = 1;
+
+	VkFramebuffer framebuffers[vkConfig_BufferCount];
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		attachments[0] = swapchainImages[i];
+		VkResult framebufferCreated = vkCreateFramebuffer(vkDevice, &framebufferCreate, NO_ALLOCATOR, &framebuffers[i]);
+		if (VK_SUCCESS != framebufferCreated)
+		{
+			mist_Print("Error: Failed to create framebuffer!");
+			return -1;
+		}
+	}
+
+	mist_Print("Created framebuffers!");
 
 	// Game stuff woo!
 	MSG msg;
