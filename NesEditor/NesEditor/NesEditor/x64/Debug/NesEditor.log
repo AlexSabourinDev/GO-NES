@@ -1,0 +1,30 @@
+﻿Allocator.obj : error LNK2019: unresolved external symbol vkAllocateMemory referenced in function mist_InitVkAllocator
+Allocator.obj : error LNK2019: unresolved external symbol vkFreeMemory referenced in function mist_CleanupVkAllocator
+main.obj : error LNK2019: unresolved external symbol vkCreateBuffer referenced in function mist_VkCreateBuffer
+main.obj : error LNK2019: unresolved external symbol vkGetBufferMemoryRequirements referenced in function mist_VkCreateBuffer
+main.obj : error LNK2019: unresolved external symbol vkBindBufferMemory referenced in function mist_VkCreateBuffer
+main.obj : error LNK2019: unresolved external symbol vkMapMemory referenced in function mist_VkCreateBuffer
+main.obj : error LNK2019: unresolved external symbol vkCreateInstance referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkCreateWin32SurfaceKHR referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkEnumeratePhysicalDevices referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkGetPhysicalDeviceQueueFamilyProperties referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkEnumerateDeviceExtensionProperties referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkGetPhysicalDeviceSurfaceCapabilitiesKHR referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkGetPhysicalDeviceSurfaceFormatsKHR referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkGetPhysicalDeviceSurfacePresentModesKHR referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkGetPhysicalDeviceMemoryProperties referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkGetPhysicalDeviceProperties referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkGetPhysicalDeviceSurfaceSupportKHR referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkCreateDevice referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkGetDeviceQueue referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkCreateSemaphore referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkCreateCommandPool referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkAllocateCommandBuffers referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkCreateFence referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkCreateSwapchainKHR referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkGetSwapchainImagesKHR referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkCreateImageView referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkCreateRenderPass referenced in function main
+main.obj : error LNK2019: unresolved external symbol vkCreateFramebuffer referenced in function main
+C:\VulkanSDK\1.1.70.1\Lib32\vulkan-1.lib : warning LNK4272: library machine type 'X86' conflicts with target machine type 'x64'
+C:\Users\Alexandre\Desktop\Development\NES\JezzBall\NesEditor\NesEditor\x64\Debug\NesEditor.exe : fatal error LNK1120: 28 unresolved externals

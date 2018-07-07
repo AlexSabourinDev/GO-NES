@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <assert.h>
 #include <stdbool.h>
+#include <assert.h>
 
 // Platform
 #include <Windows.h>
@@ -10,7 +11,15 @@
 // Vulkan!
 #define VK_PROTOTYPES
 #define VK_USE_PLATFORM_WIN32_KHR
-#include <Vulkan/Vulkan.h>
+#include <vulkan/vulkan.h>
+
+#include "MistVk.h"
+#include "Allocator.h"
+
+void mist_Print(const char* message)
+{
+	printf("%s\n", message);
+}
 
 HWND mist_CreateWindow(const char* windowName, bool showFullscreen, int width, int height, HINSTANCE hinstance, WNDPROC wndproc)
 {
@@ -136,6 +145,39 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	return (DefWindowProc(hWnd, uMsg, wParam, lParam));
 }
 
+typedef struct mist_VkBuffer
+{
+	mist_VkAlloc alloc;
+	void*        mappedMem;
+	
+	VkBuffer     buffer;
+
+} mist_VkBuffer;
+
+mist_VkBuffer mist_VkCreateBuffer(VkDevice device, mist_VkAllocator* allocator, void* data, VkDeviceSize size, VkBufferUsageFlags usage)
+{
+	VkBufferCreateInfo bufferCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+		.size = size,
+		.usage = usage
+	};
+
+	VkBuffer buffer;
+	VK_CHECK(vkCreateBuffer(device, &bufferCreate, NO_ALLOCATOR, &buffer));
+
+	VkMemoryRequirements memoryRequirements;
+	vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
+
+	mist_VkAlloc allocation = mist_VkAllocate(allocator, memoryRequirements.size, memoryRequirements.alignment);
+	VK_CHECK(vkBindBufferMemory(device, buffer, allocation.memory, allocation.offset));
+
+	void* mappedMemory = mist_VkMapMemory(allocator, allocation);
+
+	memcpy(mappedMemory, data, size);
+	return (mist_VkBuffer) { .alloc = allocation, .mappedMem = mappedMemory, .buffer = buffer };
+}
+
 #define SHOW_CONSOLE 1
 
 #if SHOW_CONSOLE
@@ -149,14 +191,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	_In_ LPSTR     args, \
 	_In_ int       moreArgs)
 #endif
-
-
-void mist_Print(const char* message)
-{
-	printf("%s\n", message);
-}
-
-#define NO_ALLOCATOR NULL
 
 MIST_WIN_PROC()
 {
@@ -209,8 +243,8 @@ MIST_WIN_PROC()
 	VkInstanceCreateInfo createInfo = 
 	{
 		.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+		.pApplicationInfo = &appInfo
 	};
-	createInfo.pApplicationInfo = &appInfo;
 
 	mist_Print("Creating instance layers...");
 	const char* instanceExtensions[vkConfig_MaxInstanceExtensions];
@@ -260,57 +294,27 @@ MIST_WIN_PROC()
 	createInfo.ppEnabledLayerNames = validationLayers;
 
 	VkInstance vkInstance;
-	VkResult instanceCreated = vkCreateInstance(&createInfo, NO_ALLOCATOR, &vkInstance);
-	if (VK_SUCCESS != instanceCreated)
-	{
-		mist_Print("Error: Failed to create vkInstance!");
-		return -1;
-	}
+	VK_CHECK(vkCreateInstance(&createInfo, NO_ALLOCATOR, &vkInstance));
 
 	mist_Print("Created vkInstance!");
-
-	// TODO: Check why vkCreateDebugReportCallbackEXT isn't available
-	/*VkDebugReportCallbackEXT debugReportCallback;
-	if (vkConfig_EnableValidationLayers)
-	{
-		mist_Print("Creating debug report callback...");
-
-		VkDebugReportCallbackCreateInfoEXT debugReportInfo = {};
-		debugReportInfo.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT;
-		debugReportInfo.flags = VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT | VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT;
-		debugReportInfo.pfnCallback = mist_VkDebugReportCallback;
-
-		VkResult createDebugReportSuccess = vkCreateDebugReportCallbackEXT(vkInstance, &debugReportInfo, NO_ALLOCATOR, &debugReportCallback);
-		if (VK_SUCCESS != createDebugReportSuccess)
-		{
-			mist_Print("Failed to create debug report callback!");
-		}
-
-		mist_Print("Created debug report callback!");
-	}*/
 
 	mist_Print("Creating vkSurface...");
 	// Create the surface
 	VkWin32SurfaceCreateInfoKHR surfaceCreateInfo = 
 	{
 		.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR,
+		.hinstance = mist_WinInstance,
+		.hwnd = vulkanWindow
 	};
-	surfaceCreateInfo.hinstance = mist_WinInstance;
-	surfaceCreateInfo.hwnd = vulkanWindow;
 
 
 	VkSurfaceKHR vkSurface;
-	VkResult createWin32SurfaceSuccess = vkCreateWin32SurfaceKHR(vkInstance, &surfaceCreateInfo, NO_ALLOCATOR, &vkSurface);
-	if (VK_SUCCESS != createWin32SurfaceSuccess)
-	{
-		mist_Print("Error: Failed to create win32 surface!");
-		return -1;
-	}
+	VK_CHECK(vkCreateWin32SurfaceKHR(vkInstance, &surfaceCreateInfo, NO_ALLOCATOR, &vkSurface));
 	mist_Print("Created vkSurface!");
 
 	typedef struct GPU
 	{
-		#define vkConfig_GPU_MaxArraySize 10
+		#define vkConfig_GPU_MaxArraySize 50
 
 		VkPhysicalDevice device;
 
@@ -334,12 +338,7 @@ MIST_WIN_PROC()
 
 	mist_Print("Enumerating physical devices...");
 	uint32_t physicalDeviceCount = 0;
-	VkResult physicalDeviceCountSuccess = vkEnumeratePhysicalDevices(vkInstance, &physicalDeviceCount, NULL);
-	if (VK_SUCCESS != physicalDeviceCountSuccess)
-	{
-		mist_Print("Error: Failed to get the number of physical devices!");
-		return -1;
-	}
+	VK_CHECK(vkEnumeratePhysicalDevices(vkInstance, &physicalDeviceCount, NULL));
 
 	#define vkConfig_MaxGPUs 10
 
@@ -350,12 +349,7 @@ MIST_WIN_PROC()
 	VkPhysicalDevice physicalDevices[vkConfig_MaxGPUs];
 	mist_Print("Enumerating device properties...");
 	{
-		VkResult physicalDeviceSuccess = vkEnumeratePhysicalDevices(vkInstance, &physicalDeviceCount, physicalDevices);
-		if (VK_SUCCESS != physicalDeviceSuccess)
-		{
-			mist_Print("Error: Failed to retrieve the physical devices!");
-			return -1;
-		}
+		VK_CHECK(vkEnumeratePhysicalDevices(vkInstance, &physicalDeviceCount, physicalDevices));
 
 		for (uint32_t i = 0; i < physicalDeviceCount; i++)
 		{
@@ -365,6 +359,7 @@ MIST_WIN_PROC()
 			if (0 == GPUs[i].queuePropertyCount)
 			{
 				mist_Print("Error: Device has no queue families!");
+				assert(false);
 			}
 			
 			if (GPUs[i].queuePropertyCount > vkConfig_GPU_MaxArraySize)
@@ -377,6 +372,7 @@ MIST_WIN_PROC()
 			if (0 == GPUs[i].queuePropertyCount)
 			{
 				mist_Print("Error: Device has no queue families!");
+				assert(false);
 			}
 
 
@@ -384,6 +380,7 @@ MIST_WIN_PROC()
 			if (VK_SUCCESS != extensionCountResult || 0 == GPUs[i].extensionPropertyCount)
 			{
 				mist_Print("Error: Device has no extension properties!");
+				assert(false);
 			}
 
 			if (GPUs[i].extensionPropertyCount > vkConfig_GPU_MaxArraySize)
@@ -397,6 +394,7 @@ MIST_WIN_PROC()
 			if (VK_SUCCESS != extensionResult || 0 == GPUs[i].extensionPropertyCount)
 			{
 				mist_Print("Error: Device has no extension properties!");
+				assert(false);
 			}
 
 
@@ -404,6 +402,7 @@ MIST_WIN_PROC()
 			if (VK_SUCCESS != surfaceCapabilitiesResult)
 			{
 				mist_Print("Error: Failed to get surface capabilities!");
+				assert(false);
 			}
 
 
@@ -411,6 +410,7 @@ MIST_WIN_PROC()
 			if (VK_SUCCESS != surfaceFormatCountResult || 0 == GPUs[i].surfaceFormatCount)
 			{
 				mist_Print("Error: Surface has no surface formats!");
+				assert(false);
 			}
 
 			if (GPUs[i].surfaceFormatCount > vkConfig_GPU_MaxArraySize)
@@ -423,6 +423,7 @@ MIST_WIN_PROC()
 			if (VK_SUCCESS != surfaceFormatResult || 0 == GPUs[i].surfaceFormatCount)
 			{
 				mist_Print("Error: Surface has no surface formats!");
+				assert(false);
 			}
 
 
@@ -430,6 +431,7 @@ MIST_WIN_PROC()
 			if (VK_SUCCESS != presentModeCountResult || 0 == GPUs[i].presentModeCount)
 			{
 				mist_Print("Error: Surface has no present modes!");
+				assert(false);
 			}
 
 			if (GPUs[i].presentModeCount > vkConfig_GPU_MaxArraySize)
@@ -442,6 +444,7 @@ MIST_WIN_PROC()
 			if (VK_SUCCESS != presentModeResult || 0 == GPUs[i].presentModeCount)
 			{
 				mist_Print("Error: Surface has no present modes!");
+				assert(false);
 			}
 
 
@@ -500,6 +503,7 @@ MIST_WIN_PROC()
 				if (VK_SUCCESS != supportCall)
 				{
 					mist_Print("Error: Failed to check if the physical device supports KHR!");
+					assert(false);
 					continue;
 				}
 
@@ -524,12 +528,13 @@ MIST_WIN_PROC()
 	if (NULL == selectedGPU)
 	{
 		mist_Print("Error: Failed to select a physical device!");
+		assert(false);
 		return -1;
 	}
 	mist_Print("Best physical device selected!");
 
 	mist_Print("Creating logical device...");
-	VkDeviceQueueCreateInfo queueCreateInfo[2] = {0};
+	VkDeviceQueueCreateInfo queueCreateInfo[2] = { {0}, {0} };
 	int queueCreateInfoCount = 0;
 
 	static const float graphicsQueuePriority = 1.0f;
@@ -538,9 +543,9 @@ MIST_WIN_PROC()
 	{
 		.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
 		.queueCount = 1,
+		.queueFamilyIndex = selectedGraphicsQueue,
+		.pQueuePriorities = &graphicsQueuePriority
 	};
-	createGraphicsQueue.queueFamilyIndex = selectedGraphicsQueue;
-	createGraphicsQueue.pQueuePriorities = &graphicsQueuePriority;
 
 	queueCreateInfo[queueCreateInfoCount] = createGraphicsQueue;
 	queueCreateInfoCount++;
@@ -553,11 +558,11 @@ MIST_WIN_PROC()
 		{
 			.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
 			.queueCount = 1,
+			.queueFamilyIndex = selectedPresentQueue,
+			.pQueuePriorities = &presentQueuePriority
 		};
-		createPresentQueue.queueFamilyIndex = selectedPresentQueue;
-		createPresentQueue.pQueuePriorities = &presentQueuePriority;
 
-		queueCreateInfo[queueCreateInfoCount] = createGraphicsQueue;
+		queueCreateInfo[queueCreateInfoCount] = createPresentQueue;
 		queueCreateInfoCount++;
 	}
 
@@ -568,11 +573,11 @@ MIST_WIN_PROC()
 	{
 		.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
 		.enabledExtensionCount = vkConfig_MaxDeviceExtensions,
+		.queueCreateInfoCount = queueCreateInfoCount,
+		.pQueueCreateInfos = queueCreateInfo,
+		.pEnabledFeatures = &physicalDeviceFeatures,
+		.ppEnabledExtensionNames = vkConfig_DeviceExtensions
 	};
-	deviceCreateInfo.queueCreateInfoCount = queueCreateInfoCount;
-	deviceCreateInfo.pQueueCreateInfos = queueCreateInfo;
-	deviceCreateInfo.pEnabledFeatures = &physicalDeviceFeatures;
-	deviceCreateInfo.ppEnabledExtensionNames = vkConfig_DeviceExtensions;
 
 
 	if (vkConfig_EnableValidationLayers)
@@ -589,12 +594,7 @@ MIST_WIN_PROC()
 	VkQueue graphicsQueue;
 	VkQueue presentQueue;
 
-	VkResult createdLogicalDevice = vkCreateDevice(selectedGPU->device, &deviceCreateInfo, NO_ALLOCATOR, &vkDevice);
-	if (VK_SUCCESS != createdLogicalDevice)
-	{
-		mist_Print("Error: Failed to create a logical device!");
-		return -1;
-	}
+	VK_CHECK(vkCreateDevice(selectedGPU->device, &deviceCreateInfo, NO_ALLOCATOR, &vkDevice));
 
 	vkGetDeviceQueue(vkDevice, selectedGraphicsQueue, 0, &graphicsQueue);
 	vkGetDeviceQueue(vkDevice, selectedPresentQueue, 0, &presentQueue);
@@ -610,19 +610,8 @@ MIST_WIN_PROC()
 	VkSemaphore frameCompleteSemaphores[vkConfig_BufferCount];
 	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
 	{
-		VkResult acquireSemaphoreCreation = vkCreateSemaphore(vkDevice, &semaphoreCreateInfo, NO_ALLOCATOR, &acquireSemaphores[i]);
-		if (VK_SUCCESS != acquireSemaphoreCreation)
-		{
-			mist_Print("Error: Failed to create an acquire semaphore!");
-			return -1;
-		}
-
-		VkResult frameSemaphoreCreation = vkCreateSemaphore(vkDevice, &semaphoreCreateInfo, NO_ALLOCATOR, &frameCompleteSemaphores[i]);
-		if (VK_SUCCESS != frameSemaphoreCreation)
-		{
-			mist_Print("Error: Failed to create a frame semaphore!");
-			return -1;
-		}
+		VK_CHECK(vkCreateSemaphore(vkDevice, &semaphoreCreateInfo, NO_ALLOCATOR, &acquireSemaphores[i]));
+		VK_CHECK(vkCreateSemaphore(vkDevice, &semaphoreCreateInfo, NO_ALLOCATOR, &frameCompleteSemaphores[i]));
 	}
 	mist_Print("Created Semaphores!");
 
@@ -633,15 +622,10 @@ MIST_WIN_PROC()
 	{
 		.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
 		.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
+		.queueFamilyIndex = selectedGraphicsQueue
 	};
-	commandPoolCreateInfo.queueFamilyIndex = selectedGraphicsQueue;
 
-	VkResult createdCommandPool = vkCreateCommandPool(vkDevice, &commandPoolCreateInfo, NO_ALLOCATOR, &graphicsCommandPool);
-	if (VK_SUCCESS != createdCommandPool)
-	{
-		mist_Print("Error: Failed to create the command pool!");
-		return -1;
-	}
+	VK_CHECK(vkCreateCommandPool(vkDevice, &commandPoolCreateInfo, NO_ALLOCATOR, &graphicsCommandPool));
 
 	VkCommandBuffer graphicsCommandBuffers[vkConfig_BufferCount];
 
@@ -649,16 +633,11 @@ MIST_WIN_PROC()
 	{
 		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
 		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
-		.commandBufferCount = vkConfig_BufferCount
+		.commandBufferCount = vkConfig_BufferCount,
+		.commandPool = graphicsCommandPool
 	};
-	commandBufferAllocateInfo.commandPool = graphicsCommandPool;
 
-	VkResult allocatedCommandBuffer = vkAllocateCommandBuffers(vkDevice, &commandBufferAllocateInfo, graphicsCommandBuffers);
-	if (VK_SUCCESS != allocatedCommandBuffer)
-	{
-		mist_Print("Error: Failed to allocate the command buffer!");
-		return -1;
-	}
+	VK_CHECK(vkAllocateCommandBuffers(vkDevice, &commandBufferAllocateInfo, graphicsCommandBuffers));
 	mist_Print("Created command buffers!");
 
 	mist_Print("Creating fences...");
@@ -670,12 +649,7 @@ MIST_WIN_PROC()
 	};
 	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
 	{
-		VkResult createdFence = vkCreateFence(vkDevice, &fenceCreateInfo, NO_ALLOCATOR, &graphicsFences[i]);
-		if (VK_SUCCESS != createdFence)
-		{
-			mist_Print("Error: Failed to create fence!");
-			return -1;
-		}
+		VK_CHECK(vkCreateFence(vkDevice, &fenceCreateInfo, NO_ALLOCATOR, &graphicsFences[i]));
 	}
 	mist_Print("Created fences!");
 
@@ -685,6 +659,7 @@ MIST_WIN_PROC()
 	if (0 == selectedGPU->surfaceFormatCount)
 	{
 		mist_Print("Error: No surface formats available!");
+		assert(false);
 		return -1;
 	}
 
@@ -724,7 +699,7 @@ MIST_WIN_PROC()
 	VkSurfaceCapabilitiesKHR const* surfaceCapabilities = &selectedGPU->surfaceCapabilities;
 	VkExtent2D surfaceExtents = {0};
 
-	if (-1 == surfaceCapabilities->currentExtent.width)
+	if (UINT32_MAX == surfaceCapabilities->currentExtent.width)
 	{
 		surfaceExtents.width = winConfig_Width;
 		surfaceExtents.height = winConfig_Height;
@@ -740,13 +715,17 @@ MIST_WIN_PROC()
 		.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR,
 		.minImageCount = vkConfig_BufferCount,
 		.imageArrayLayers = 1,
-		.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+		.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT,
+		.surface = vkSurface,
+		.imageFormat = surfaceFormat.format,
+		.imageColorSpace = surfaceFormat.colorSpace,
+		.imageExtent = surfaceExtents,
+		.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
+		.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR,
+		.presentMode = presentMode,
+		.clipped = VK_TRUE
 	};
-	swapchainCreate.surface = vkSurface;
-	swapchainCreate.imageFormat = surfaceFormat.format;
-	swapchainCreate.imageColorSpace = surfaceFormat.colorSpace;
-	swapchainCreate.imageExtent = surfaceExtents;
-
+	
 	uint32_t swapchainShareIndices[2];
 	if (selectedGraphicsQueue != selectedPresentQueue)
 	{
@@ -762,19 +741,8 @@ MIST_WIN_PROC()
 		swapchainCreate.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	}
 
-	swapchainCreate.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
-	swapchainCreate.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-	swapchainCreate.presentMode = presentMode;
-
-	swapchainCreate.clipped = VK_TRUE;
-
 	VkSwapchainKHR vkSwapchain;
-	VkResult createdSwapchain = vkCreateSwapchainKHR(vkDevice, &swapchainCreate, NO_ALLOCATOR, &vkSwapchain);
-	if (VK_SUCCESS != createdSwapchain)
-	{
-		mist_Print("Error: Failed to create swapchain!");
-		return -1;
-	}
+	VK_CHECK(vkCreateSwapchainKHR(vkDevice, &swapchainCreate, NO_ALLOCATOR, &vkSwapchain));
 	mist_Print("Created a swapchain!");
 
 	mist_Print("Retrieving swapchain images...");
@@ -782,13 +750,7 @@ MIST_WIN_PROC()
 	uint32_t imageCount = 0;
 	VkImage swapchainPhysicalImages[vkConfig_MaxImageCount];
 
-	VkResult retrieveImageCount = vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &imageCount, NULL);
-	if (VK_SUCCESS != retrieveImageCount)
-	{
-		mist_Print("Error: Failed to retrieve the image count from the swapchain!");
-		return -1;
-	}
-
+	VK_CHECK(vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &imageCount, NULL));
 	if (imageCount > vkConfig_MaxImageCount)
 	{
 		mist_Print("Warning: Too many images for the swapchain");
@@ -796,16 +758,12 @@ MIST_WIN_PROC()
 
 	imageCount = min(vkConfig_MaxImageCount, imageCount);
 
-	VkResult retrieveSwapchainImages = vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &imageCount, swapchainPhysicalImages);
-	if (VK_SUCCESS != retrieveSwapchainImages)
-	{
-		mist_Print("Error: Failed to retrieve the images from the swapchain!");
-		return -1;
-	}
+	VK_CHECK(vkGetSwapchainImagesKHR(vkDevice, vkSwapchain, &imageCount, swapchainPhysicalImages));
 
 	if (vkConfig_BufferCount > imageCount)
 	{
 		mist_Print("Error: Not enough images retrieved from the swapchain!");
+		assert(false);
 		return -1;
 	}
 	VkImageView swapchainImages[vkConfig_BufferCount];
@@ -825,17 +783,12 @@ MIST_WIN_PROC()
 			.subresourceRange.baseMipLevel = 0,
 			.subresourceRange.levelCount = 1,
 			.subresourceRange.baseArrayLayer = 0,
-			.subresourceRange.layerCount = 1
+			.subresourceRange.layerCount = 1,
+			.image = swapchainPhysicalImages[i],
+			.format = surfaceFormat.format
 		};
-		imageViewCreate.image = swapchainPhysicalImages[i];
-		imageViewCreate.format = surfaceFormat.format;
 
-		VkResult createdImageView = vkCreateImageView(vkDevice, &imageViewCreate, NO_ALLOCATOR, &swapchainImages[i]);
-		if (VK_SUCCESS != createdImageView)
-		{
-			mist_Print("Error: Failed to create an image view!");
-			return -1;
-		}
+		VK_CHECK(vkCreateImageView(vkDevice, &imageViewCreate, NO_ALLOCATOR, &swapchainImages[i]));
 	}
 	mist_Print("Retrieved swapchain images!");
 
@@ -870,10 +823,9 @@ MIST_WIN_PROC()
 		.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
 		.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
 		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-		.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR
+		.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+		.format = surfaceFormat.format
 	};
-	colorAttachment.format = surfaceFormat.format;
-
 	renderPassAttachments[0] = colorAttachment;
 
 	// TODO: Add depth when we can create images
@@ -901,8 +853,8 @@ MIST_WIN_PROC()
 	{
 		.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
 		.colorAttachmentCount = 1,
+		.pColorAttachments = &colorReference
 	};
-	subpass.pColorAttachments = &colorReference;
 
 	// subpass.pDepthStencilAttachment = &depthReference; // TODO: depth
 
@@ -912,17 +864,12 @@ MIST_WIN_PROC()
 		.attachmentCount = ARRAYSIZE(renderPassAttachments),
 		.subpassCount = 1,
 		.dependencyCount = 0,
+		.pAttachments = renderPassAttachments,
+		.pSubpasses = &subpass
 	};
-	createRenderPass.pAttachments = renderPassAttachments;
-	createRenderPass.pSubpasses = &subpass;
 
 	VkRenderPass vkRenderPass;
-	VkResult renderPassCreated = vkCreateRenderPass(vkDevice, &createRenderPass, NO_ALLOCATOR, &vkRenderPass);
-	if (VK_SUCCESS != renderPassCreated)
-	{
-		mist_Print("Error: Failed to create a render pass!");
-		return -1;
-	}
+	VK_CHECK(vkCreateRenderPass(vkDevice, &createRenderPass, NO_ALLOCATOR, &vkRenderPass));
 	mist_Print("Created render pass!");
 
 	mist_Print("Creating framebuffers...");
@@ -937,24 +884,52 @@ MIST_WIN_PROC()
 		.attachmentCount = ARRAYSIZE(attachments),
 		.width = winConfig_Width,
 		.height = winConfig_Height,
-		.layers = 1
+		.layers = 1,
+		.renderPass = vkRenderPass,
+		.pAttachments = attachments
 	};
-	framebufferCreate.renderPass = vkRenderPass;
-	framebufferCreate.pAttachments = attachments;
 
 	VkFramebuffer framebuffers[vkConfig_BufferCount];
 	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
 	{
 		attachments[0] = swapchainImages[i];
-		VkResult framebufferCreated = vkCreateFramebuffer(vkDevice, &framebufferCreate, NO_ALLOCATOR, &framebuffers[i]);
-		if (VK_SUCCESS != framebufferCreated)
-		{
-			mist_Print("Error: Failed to create framebuffer!");
-			return -1;
-		}
+		VK_CHECK(vkCreateFramebuffer(vkDevice, &framebufferCreate, NO_ALLOCATOR, &framebuffers[i]));
 	}
 
 	mist_Print("Created framebuffers!");
+
+	mist_VkAllocator vkAllocator;
+	uint32_t preferedMemoryIndex = UINT32_MAX;
+	VkMemoryType* types = selectedGPU->memoryProperties.memoryTypes;
+
+	VkMemoryPropertyFlags requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+	VkMemoryPropertyFlags preferedFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+	for (uint32_t i = 0; i < selectedGPU->memoryProperties.memoryTypeCount; ++i)
+	{
+		if ((types[i].propertyFlags & (requiredFlags | preferedFlags)) == (requiredFlags | preferedFlags))
+		{
+			preferedMemoryIndex = types[i].heapIndex;
+			break;
+		}
+	}
+
+	if (preferedMemoryIndex == UINT32_MAX)
+	{
+		for (uint32_t i = 0; i < selectedGPU->memoryProperties.memoryTypeCount; ++i)
+		{
+			if ((types[i].propertyFlags & requiredFlags) == requiredFlags)
+			{
+				preferedMemoryIndex = i;
+				break;
+			}
+		}
+	}
+
+	mist_Print("Initializing allocator!");
+	mist_InitVkAllocator(&vkAllocator, vkDevice, 1024 * 1024, preferedMemoryIndex, mist_AllocatorHostVisible);
+	mist_Print("Initialized allocator!");
+
+
 
 	// Game stuff woo!
 	MSG msg;
@@ -972,6 +947,44 @@ MIST_WIN_PROC()
 			}
 		}
 	}
+
+	mist_Print("Shutting down...");
+
+	mist_Print("Cleaning up allocator!");
+	mist_CleanupVkAllocator(&vkAllocator, vkDevice);
+	mist_Print("Cleaned up allocator!");
+
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		vkDestroyFence(vkDevice, graphicsFences[i], NO_ALLOCATOR);
+	}
+
+	vkDestroyCommandPool(vkDevice, graphicsCommandPool, NO_ALLOCATOR);
+
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		vkDestroySemaphore(vkDevice, acquireSemaphores[i], NO_ALLOCATOR);
+		vkDestroySemaphore(vkDevice, frameCompleteSemaphores[i], NO_ALLOCATOR);
+	}
+
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		vkDestroyFramebuffer(vkDevice, framebuffers[i], NO_ALLOCATOR);
+	}
+
+	vkDestroyRenderPass(vkDevice, vkRenderPass, NO_ALLOCATOR);
+
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		vkDestroyImageView(vkDevice, swapchainImages[i], NO_ALLOCATOR);
+	}
+
+	vkDestroySwapchainKHR(vkDevice, vkSwapchain, NO_ALLOCATOR);
+	vkDestroySurfaceKHR(vkInstance, vkSurface, NO_ALLOCATOR);
+	vkDestroyDevice(vkDevice, NO_ALLOCATOR);
+	vkDestroyInstance(vkInstance, NO_ALLOCATOR);
+
+	mist_Print("Shutdown!");
 
 	return 0;
 } 
