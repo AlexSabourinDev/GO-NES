@@ -929,18 +929,120 @@ MIST_WIN_PROC()
 	mist_InitVkAllocator(&vkAllocator, vkDevice, 1024 * 1024, preferedMemoryIndex, mist_AllocatorHostVisible);
 	mist_Print("Initialized allocator!");
 
-
-
 	// Game stuff woo!
+	uint8_t currentFrame = 0;
+
 	MSG msg;
 	bool quitMessageReceived = false;
-	while (!quitMessageReceived) 
+	while (!quitMessageReceived)
 	{
-		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) 
+		// Start the frame
+		uint32_t imageIndex = 0;
+		VK_CHECK(vkAcquireNextImageKHR(vkDevice, vkSwapchain, UINT64_MAX, acquireSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex));
+
+		// Setup the pipeline
+
+		VkCommandBufferBeginInfo beginBufferInfo =
+		{
+			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
+		};
+		VK_CHECK(vkBeginCommandBuffer(graphicsCommandBuffers[currentFrame], &beginBufferInfo));
+
+		VkMemoryBarrier barrier =
+		{
+			.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+			.srcAccessMask = VK_ACCESS_HOST_WRITE_BIT,
+			.dstAccessMask = 
+				VK_ACCESS_INDEX_READ_BIT |
+				VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT |
+				VK_ACCESS_UNIFORM_READ_BIT |
+				VK_ACCESS_SHADER_READ_BIT |
+				VK_ACCESS_SHADER_WRITE_BIT |
+				VK_ACCESS_TRANSFER_READ_BIT |
+				VK_ACCESS_TRANSFER_WRITE_BIT
+		};
+		vkCmdPipelineBarrier(graphicsCommandBuffers[currentFrame],
+			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+			0, 1, &barrier, 0, NULL, 0, NULL);
+
+		#define MIST_FRAME_NUM_CLEARS 1
+		VkClearColorValue clearColor = { .float32 = { 0.7f, 0.4f, 0.2f, 1.0f } };
+		VkClearValue clearValues[MIST_FRAME_NUM_CLEARS] = 
+		{
+			{ .color = clearColor }
+		};
+
+		VkRenderPassBeginInfo renderPassBeginInfo =
+		{
+			.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+			.renderPass = vkRenderPass,
+			.framebuffer = framebuffers[currentFrame],
+			.renderArea = {.extent = surfaceExtents },
+			.clearValueCount = MIST_FRAME_NUM_CLEARS,
+			.pClearValues = clearValues
+		};
+
+		VkImageSubresourceRange imageRange = 
+		{
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.baseMipLevel = 0,
+			.levelCount = 1,
+			.baseArrayLayer = 0,
+			.layerCount = 1
+		};
+
+		vkCmdClearColorImage(graphicsCommandBuffers[currentFrame], swapchainPhysicalImages[imageIndex], VK_IMAGE_LAYOUT_GENERAL, &clearColor, 1, &imageRange);
+
+		vkCmdBeginRenderPass(graphicsCommandBuffers[currentFrame], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+		// Draw frame
+
+		// Finish the frame
+		vkCmdEndRenderPass(graphicsCommandBuffers[currentFrame]);
+		vkEndCommandBuffer(graphicsCommandBuffers[currentFrame]);
+
+		VkSemaphore* acquire = &acquireSemaphores[currentFrame];
+		VkSemaphore* finished = &frameCompleteSemaphores[currentFrame];
+
+		VkPipelineStageFlags dstStageMask = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+		VkSubmitInfo submitInfo =
+		{
+			.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+			.commandBufferCount = 1,
+			.pCommandBuffers = &graphicsCommandBuffers[currentFrame],
+			.waitSemaphoreCount = 1,
+			.pWaitSemaphores = acquire,
+			.signalSemaphoreCount = 1,
+			.pSignalSemaphores = finished,
+			.pWaitDstStageMask = &dstStageMask
+		};
+
+		VK_CHECK(vkQueueSubmit(graphicsQueue, 1, &submitInfo, graphicsFences[currentFrame]));
+
+		// Present the frame
+		VK_CHECK(vkWaitForFences(vkDevice, 1, &graphicsFences[currentFrame], VK_TRUE, UINT64_MAX));
+		VK_CHECK(vkResetFences(vkDevice, 1, &graphicsFences[currentFrame]));
+		
+		VkPresentInfoKHR presentInfo =
+		{
+			.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+			.waitSemaphoreCount = 1,
+			.pWaitSemaphores = finished,
+			.swapchainCount = 1,
+			.pSwapchains = &vkSwapchain,
+			.pImageIndices = &imageIndex
+		};
+		VK_CHECK(vkQueuePresentKHR(presentQueue, &presentInfo));
+
+		currentFrame = (currentFrame + 1) % vkConfig_BufferCount;
+
+		// Handle windows messages...
+		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
 		{
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
-			if (msg.message == WM_QUIT) 
+			if (msg.message == WM_QUIT)
 			{
 				quitMessageReceived = true;
 				break;
