@@ -1375,6 +1375,11 @@ MIST_WIN_PROC()
 
 	mist_Print("Shutting down...");
 
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		VK_CHECK(vkResetDescriptorPool(vkDevice, descriptorPools[i], 0));
+		vkDestroyDescriptorPool(vkDevice, descriptorPools[i], NO_ALLOCATOR);
+	}
 	mist_VkFreeBuffer(vkDevice, &vkAllocator, vertexBuffer);
 
 	mist_Print("Cleaning up allocator!");
