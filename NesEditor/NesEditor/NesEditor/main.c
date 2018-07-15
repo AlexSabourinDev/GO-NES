@@ -1,12 +1,16 @@
 
+// Platform
+#define _CRT_SECURE_NO_WARNINGS
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#include <WinUser.h>
+
 // Standard lib
 #include <stdio.h>
 #include <assert.h>
 #include <stdbool.h>
 #include <assert.h>
-
-// Platform
-#include <Windows.h>
+#include <stdlib.h>
 
 // Vulkan!
 #define VK_PROTOTYPES
@@ -176,6 +180,12 @@ mist_VkBuffer mist_VkCreateBuffer(VkDevice device, mist_VkAllocator* allocator, 
 
 	memcpy(mappedMemory, data, size);
 	return (mist_VkBuffer) { .alloc = allocation, .mappedMem = mappedMemory, .buffer = buffer };
+}
+
+void mist_VkFreeBuffer(VkDevice device, mist_VkAllocator* allocator, mist_VkBuffer buffer)
+{
+	vkDestroyBuffer(device, buffer.buffer, NO_ALLOCATOR);
+	mist_VkFree(allocator, buffer.alloc);
 }
 
 #define SHOW_CONSOLE 1
@@ -925,9 +935,300 @@ MIST_WIN_PROC()
 		}
 	}
 
-	mist_Print("Initializing allocator!");
+	mist_Print("Initializing allocator...");
 	mist_InitVkAllocator(&vkAllocator, vkDevice, 1024 * 1024, preferedMemoryIndex, mist_AllocatorHostVisible);
 	mist_Print("Initialized allocator!");
+
+	mist_Print("Initializing shaders...");
+
+	mist_Print("Initializing vertex shader...");
+	FILE* vertFile = fopen("../../Assets/Shaders/SPIR-V/default.vspv", "r");
+
+	fseek(vertFile, 0, SEEK_END);
+	long vertFileSize = ftell(vertFile);
+	fseek(vertFile, 0, SEEK_SET);  //same as rewind(f);
+
+	void* vertShaderSource = malloc(vertFileSize);
+	fread(vertShaderSource, vertFileSize, 1, vertFile);
+	fclose(vertFile);
+
+	VkShaderModuleCreateInfo createVertShader =
+	{
+		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+		.codeSize = vertFileSize,
+		.pCode = (const uint32_t*)vertShaderSource
+	};
+
+	VkShaderModule vertShader;
+	VK_CHECK(vkCreateShaderModule(vkDevice, &createVertShader, NO_ALLOCATOR, &vertShader));
+	mist_Print("Vertex shader initialized!");
+
+	mist_Print("Initializing fragment shader...");
+	FILE* fragFile = fopen("../../Assets/Shaders/SPIR-V/default.fspv", "r");
+
+	fseek(fragFile, 0, SEEK_END);
+	long fragFileSize = ftell(fragFile);
+	fseek(fragFile, 0, SEEK_SET);  //same as rewind(f);
+
+	void* fragShaderSource = malloc(fragFileSize);
+	fread(fragShaderSource, fragFileSize, 1, fragFile);
+	fclose(fragFile);
+
+	VkShaderModuleCreateInfo createFragShader =
+	{
+		.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+		.codeSize = fragFileSize,
+		.pCode = (const uint32_t*)fragShaderSource
+	};
+
+	VkShaderModule fragShader;
+	VK_CHECK(vkCreateShaderModule(vkDevice, &createFragShader, NO_ALLOCATOR, &fragShader));
+	mist_Print("Fragment shader initialized!");
+
+	mist_Print("Initialized shaders!");
+
+
+	mist_Print("Initializing pipeline...");
+
+	mist_Print("Creating descriptor layout...");
+	VkDescriptorSetLayoutCreateInfo layoutCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+		.bindingCount = 0,
+		.pBindings = NULL
+	};
+
+	VkDescriptorSetLayout descriptorSetLayout;
+	VK_CHECK(vkCreateDescriptorSetLayout(vkDevice, &layoutCreate, NO_ALLOCATOR, &descriptorSetLayout));
+	mist_Print("Created descriptor layout!");
+
+	mist_Print("Creating pipeline layout...");
+	VkPipelineLayoutCreateInfo pipelineLayoutCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+		.setLayoutCount = 1,
+		.pSetLayouts = &descriptorSetLayout
+	};
+
+	VkPipelineLayout pipelineLayout;
+	VK_CHECK(vkCreatePipelineLayout(vkDevice, &pipelineLayoutCreate, NO_ALLOCATOR, &pipelineLayout));
+	mist_Print("Pipeline layout created!");
+
+
+	mist_Print("Vertex Input...");
+
+	// Vertex Input
+	VkVertexInputBindingDescription inputBinding =
+	{
+		.stride = sizeof(float) * 3.0f,
+		.inputRate = VK_VERTEX_INPUT_RATE_VERTEX
+	};
+
+	VkVertexInputAttributeDescription inputAttribute =
+	{
+		.format = VK_FORMAT_R32G32B32_SFLOAT,
+		.location = 0,
+		.offset = 0
+	};
+
+	VkPipelineVertexInputStateCreateInfo vertexInputCreate = 
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+		.vertexBindingDescriptionCount = 1,
+		.pVertexBindingDescriptions = &inputBinding,
+		.vertexAttributeDescriptionCount = 1,
+		.pVertexAttributeDescriptions = &inputAttribute
+	};
+
+	mist_Print("Input assembly...");
+
+	// Input Assembly
+	VkPipelineInputAssemblyStateCreateInfo inputAssemblyCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+		.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+	};
+
+	mist_Print("Rasterization...");
+
+	// Rasterization
+	VkPipelineRasterizationStateCreateInfo rasterizationCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+		.rasterizerDiscardEnable = VK_FALSE,
+		.depthBiasEnable = VK_FALSE,
+		.depthClampEnable = VK_FALSE,
+		.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE,
+		.lineWidth = 1.0f,
+		.polygonMode = VK_POLYGON_MODE_FILL,
+		.cullMode = VK_CULL_MODE_BACK_BIT
+	};
+
+	VkPipelineColorBlendAttachmentState colorBlendAttachment =
+	{
+		.blendEnable = VK_TRUE,
+		.colorBlendOp = VK_BLEND_OP_ADD,
+		.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+		.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+		.alphaBlendOp = VK_BLEND_OP_ADD,
+		.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA,
+		.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+		.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+	};
+
+	VkPipelineColorBlendStateCreateInfo colorBlendCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+		.attachmentCount = 1,
+		.pAttachments = &colorBlendAttachment
+	};
+
+	VkPipelineDepthStencilStateCreateInfo depthStencilCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+		.depthTestEnable = VK_FALSE,
+		.depthWriteEnable = VK_FALSE,
+		.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL,
+		.depthBoundsTestEnable = VK_FALSE,
+		.minDepthBounds = 0.0f,
+		.maxDepthBounds = 1.0f,
+		.stencilTestEnable = VK_FALSE
+		/*.front, .back */
+	};
+
+	VkPipelineMultisampleStateCreateInfo multisampleCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+		.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT
+	};
+
+	VkPipelineShaderStageCreateInfo vertexStage =
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+		.pName = "main",
+		.module = vertShader,
+		.stage = VK_SHADER_STAGE_VERTEX_BIT
+	};
+
+	VkPipelineShaderStageCreateInfo fragStage = 
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+		.pName = "main",
+		.module = fragShader,
+		.stage = VK_SHADER_STAGE_FRAGMENT_BIT
+	};
+
+	VkPipelineShaderStageCreateInfo shaderStages[] = { vertexStage, fragStage };
+
+	VkDynamicState dynamicState[] = { VK_DYNAMIC_STATE_LINE_WIDTH };
+
+	VkPipelineDynamicStateCreateInfo dynamicStateCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+		.dynamicStateCount = ARRAYSIZE(dynamicState),
+		.pDynamicStates = dynamicState
+	};
+
+	VkRect2D scissor =
+	{
+		{ .x = 0, .y = 0 },
+		{ .width = winConfig_Width, .height = winConfig_Height }
+	};
+
+	VkViewport viewport =
+	{
+		.x = 0,
+		.y = 0,
+		.width = winConfig_Width,
+		.height = winConfig_Height,
+		.minDepth = 0.0f,
+		.maxDepth = 1.0f
+	};
+
+	VkPipelineViewportStateCreateInfo viewportStateCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+		.viewportCount = 1,
+		.pViewports = &viewport,
+		.scissorCount = 1,
+		.pScissors = &scissor
+	};
+
+	VkGraphicsPipelineCreateInfo graphicsPipelineCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+		.layout = pipelineLayout,
+		.renderPass = vkRenderPass,
+		.pVertexInputState = &vertexInputCreate,
+		.pInputAssemblyState = &inputAssemblyCreate,
+		.pRasterizationState = &rasterizationCreate,
+		.pColorBlendState = &colorBlendCreate,
+		.pDepthStencilState = &depthStencilCreate,
+		.pMultisampleState = &multisampleCreate,
+		.pDynamicState = &dynamicStateCreate,
+		.pViewportState = &viewportStateCreate,
+		.stageCount = ARRAYSIZE(shaderStages),
+		.pStages = shaderStages
+	};
+
+	VkPipelineCacheCreateInfo pipelineCacheCreate = 
+	{
+		.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO
+	};
+
+	VkPipelineCache pipelineCache;
+	VK_CHECK(vkCreatePipelineCache(vkDevice, &pipelineCacheCreate, NO_ALLOCATOR, &pipelineCache));
+
+	VkPipeline pipeline;
+	VK_CHECK(vkCreateGraphicsPipelines(vkDevice, pipelineCache, 1, &graphicsPipelineCreate, NO_ALLOCATOR, &pipeline));
+
+	mist_Print("Pipeline initialized!");
+
+
+	mist_Print("Creating descriptor pool...");
+
+	#define vkConfig_MaxUniformBufferCount 1000
+	#define vkConfig_MaxImageSamples 1000
+	VkDescriptorPoolSize descriptorPoolSizes[2] =
+	{
+		{ .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .descriptorCount = vkConfig_MaxUniformBufferCount },
+		{ .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, vkConfig_MaxImageSamples }
+	};
+
+	#define vkConfig_MaxDescriptorSets 1000
+	VkDescriptorPoolCreateInfo descriptorPoolCreate = 
+	{
+		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+		.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT,
+		.maxSets = vkConfig_MaxDescriptorSets,
+		.poolSizeCount = ARRAYSIZE(descriptorPoolSizes),
+		.pPoolSizes = descriptorPoolSizes
+	};
+
+	VkDescriptorPool descriptorPools[vkConfig_BufferCount];
+	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
+	{
+		VK_CHECK(vkCreateDescriptorPool(vkDevice, &descriptorPoolCreate, NO_ALLOCATOR, &descriptorPools[i]));
+	}
+
+	mist_Print("Created descriptor pool!");
+
+	mist_Print("Creating vertex buffer...");
+
+	float vertices[] =
+	{
+		-0.5f, 0.0f, 0.0f,
+		0.5f, 0.0f, 0.0f,
+		0.0f, -0.5f, 0.0f
+	};
+	mist_VkBuffer vertexBuffer = mist_VkCreateBuffer(vkDevice, &vkAllocator, vertices, sizeof(float) * ARRAYSIZE(vertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+
+	mist_Print("Created vertex buffer!");
+
+	VkDescriptorSet descriptorSets[vkConfig_MaxDescriptorSets];
+	bool allocatedDescriptorSets = false;
+
+	uint32_t activeDescriptorSet = 0;
 
 	// Game stuff woo!
 	uint8_t currentFrame = 0;
@@ -941,6 +1242,20 @@ MIST_WIN_PROC()
 		VK_CHECK(vkAcquireNextImageKHR(vkDevice, vkSwapchain, UINT64_MAX, acquireSemaphores[currentFrame], VK_NULL_HANDLE, &imageIndex));
 
 		// Setup the pipeline
+		VkDescriptorSetAllocateInfo descriptorSetAlloc =
+		{
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+			.descriptorPool = descriptorPools[currentFrame],
+			.descriptorSetCount = 1,
+			.pSetLayouts = &descriptorSetLayout
+		};
+
+		if (allocatedDescriptorSets == false)
+		{
+			VK_CHECK(vkAllocateDescriptorSets(vkDevice, &descriptorSetAlloc, &descriptorSets[activeDescriptorSet]));
+		}
+		VkDescriptorSet descriptorSet = descriptorSets[activeDescriptorSet];
+
 
 		VkCommandBufferBeginInfo beginBufferInfo =
 		{
@@ -983,20 +1298,21 @@ MIST_WIN_PROC()
 			.pClearValues = clearValues
 		};
 
-		VkImageSubresourceRange imageRange = 
-		{
-			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-			.baseMipLevel = 0,
-			.levelCount = 1,
-			.baseArrayLayer = 0,
-			.layerCount = 1
-		};
-
-		vkCmdClearColorImage(graphicsCommandBuffers[currentFrame], swapchainPhysicalImages[imageIndex], VK_IMAGE_LAYOUT_GENERAL, &clearColor, 1, &imageRange);
-
 		vkCmdBeginRenderPass(graphicsCommandBuffers[currentFrame], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
+		vkCmdBindDescriptorSets(
+			graphicsCommandBuffers[currentFrame],
+			VK_PIPELINE_BIND_POINT_GRAPHICS,
+			pipelineLayout, 0, 1, &descriptorSet,
+			0, NULL);
+
+		vkCmdBindPipeline(graphicsCommandBuffers[currentFrame], VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+
 		// Draw frame
+
+		VkDeviceSize offset = 0;
+		vkCmdBindVertexBuffers(graphicsCommandBuffers[currentFrame], 0, 1, &vertexBuffer.buffer, &offset);
+		vkCmdDraw(graphicsCommandBuffers[currentFrame], 3, 1, 0, 0);
 
 		// Finish the frame
 		vkCmdEndRenderPass(graphicsCommandBuffers[currentFrame]);
@@ -1036,6 +1352,13 @@ MIST_WIN_PROC()
 		VK_CHECK(vkQueuePresentKHR(presentQueue, &presentInfo));
 
 		currentFrame = (currentFrame + 1) % vkConfig_BufferCount;
+		
+		activeDescriptorSet++;
+		if (activeDescriptorSet >= vkConfig_MaxDescriptorSets)
+		{
+			allocatedDescriptorSets = true;
+			activeDescriptorSet = 0;
+		}
 
 		// Handle windows messages...
 		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
@@ -1052,9 +1375,18 @@ MIST_WIN_PROC()
 
 	mist_Print("Shutting down...");
 
+	mist_VkFreeBuffer(vkDevice, &vkAllocator, vertexBuffer);
+
 	mist_Print("Cleaning up allocator!");
 	mist_CleanupVkAllocator(&vkAllocator, vkDevice);
 	mist_Print("Cleaned up allocator!");
+
+	vkDestroyPipeline(vkDevice, pipeline, NO_ALLOCATOR);
+	vkDestroyPipelineCache(vkDevice, pipelineCache, NO_ALLOCATOR);
+	vkDestroyPipelineLayout(vkDevice, pipelineLayout, NO_ALLOCATOR);
+	vkDestroyDescriptorSetLayout(vkDevice, descriptorSetLayout, NO_ALLOCATOR);
+	vkDestroyShaderModule(vkDevice, fragShader, NO_ALLOCATOR);
+	vkDestroyShaderModule(vkDevice, vertShader, NO_ALLOCATOR);
 
 	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
 	{
