@@ -1307,61 +1307,17 @@ void KillVkAllocator(
 	mist_Print("Cleaned up allocator!");
 }
 
-void RecordCommandBuffers()
+void RecordCommandBuffers(uint32_t surfaceWidth, uint32_t surfaceHeight)
 {
-	VkImageSubresourceRange subresourceRange = 
-	{
-		.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-		.baseMipLevel = 0,
-		.levelCount = 1,
-		.baseArrayLayer = 0,
-		.layerCount = 1
-	};
-
-	uint32_t swapchainCount = 2;
-	VkImage swapchainImages[2];
-	VK_CHECK(vkGetSwapchainImagesKHR(g_VkDevice, g_VkSwapchain, &swapchainCount, swapchainImages));
-
 	static VkDescriptorSet s_DescriptorSets[vkConfig_BufferCount];
 
 	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
 	{
-		VkImageMemoryBarrier presentToClear =
-		{
-			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-			.srcAccessMask = VK_ACCESS_MEMORY_READ_BIT,
-			.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-			.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-			.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-			.srcQueueFamilyIndex = g_VkPresentQueueIdx,
-			.dstQueueFamilyIndex = g_VkPresentQueueIdx,
-			.image = swapchainImages[i],
-			.subresourceRange = subresourceRange
-		};
-
-		VkImageMemoryBarrier clearToPresent =
-		{
-			.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-			.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-			.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
-			.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-			.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-			.srcQueueFamilyIndex = g_VkPresentQueueIdx,
-			.dstQueueFamilyIndex = g_VkPresentQueueIdx,
-			.image = swapchainImages[i],
-			.subresourceRange = subresourceRange
-		};
-
 		VkCommandBufferBeginInfo beginBufferInfo =
 		{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
 		};
 		VK_CHECK(vkBeginCommandBuffer(g_GraphicsCommandBuffers[i], &beginBufferInfo));
-
-		VkClearColorValue clearColor = { .float32 = {0.0f, 0.0f, 0.0f, 0.0f} };
-		vkCmdPipelineBarrier(g_GraphicsCommandBuffers[i], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL, 1, &presentToClear);
-		vkCmdClearColorImage(g_GraphicsCommandBuffers[i], swapchainImages[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clearColor, 1, &subresourceRange);
-		vkCmdPipelineBarrier(g_GraphicsCommandBuffers[i], VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &clearToPresent);
 
 		VkMemoryBarrier barrier =
 		{
@@ -1381,6 +1337,7 @@ void RecordCommandBuffers()
 			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
 			0, 1, &barrier, 0, NULL, 0, NULL);
 
+		VkClearColorValue clearColor = { .float32 = { 0.0f, 0.0f, 0.0f, 0.0f } };
 		VkClearValue clearValues[1] =
 		{
 			{ .color = clearColor }
@@ -1396,6 +1353,21 @@ void RecordCommandBuffers()
 			.pClearValues = clearValues
 		};
 		vkCmdBeginRenderPass(g_GraphicsCommandBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+		VkClearAttachment clearAttachment =
+		{
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.colorAttachment = 0,
+			.clearValue = { .color = clearColor }
+		};
+
+		VkClearRect clearRect =
+		{
+			.baseArrayLayer = 0,
+			.layerCount = 1,
+			.rect = { .offset = { 0, 0 },.extent = { surfaceWidth, surfaceHeight } }
+		};
+		vkCmdClearAttachments(g_GraphicsCommandBuffers[i], 1, &clearAttachment, 1, &clearRect);
 
 		// Setup the pipeline
 		VkDescriptorSetAllocateInfo descriptorSetAlloc =
@@ -1523,7 +1495,7 @@ void VkRenderer_Init(
 	InitVkAllocator(selectedDevice, g_VkDevice);
 	CreateVkMeshes(g_VkDevice, &g_VkAllocator);
 
-	RecordCommandBuffers();
+	RecordCommandBuffers(surfaceWidth, surfaceHeight);
 }
 
 void VkRenderer_Kill()
