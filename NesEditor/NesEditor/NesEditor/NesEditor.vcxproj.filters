@@ -18,15 +18,21 @@
     <ClCompile Include="main.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="Allocator.c">
+    <ClCompile Include="VkAllocator.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="VkRenderer.c">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Allocator.h">
+    <ClInclude Include="MistVk.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="MistVk.h">
+    <ClInclude Include="VkRenderer.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="VkAllocator.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
