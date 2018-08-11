@@ -27,6 +27,7 @@ typedef struct mist_VkMemBlock
 
 typedef enum mist_AllocatorFlags
 {
+	mist_AllocatorNone = 0x00,
 	mist_AllocatorHostVisible = 0x01
 
 } mist_AllocatorFlags;

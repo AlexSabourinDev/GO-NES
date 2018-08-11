@@ -3,7 +3,9 @@
 #define _CRT_SECURE_NO_WARNINGS
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
+#include <windowsx.h>
 #include <WinUser.h>
+#include <Commdlg.h>
 
 // Standard lib
 #include <stdio.h>
@@ -16,9 +18,93 @@
 #include "VkAllocator.h"
 #include "VkRenderer.h"
 
+// GUI
+#include "MistGUI.h"
+
+
+HWND g_VulkanWindow;
+mist_Vec2 g_ScreenDimensions;
+bool g_IsMinimized;
+
+#define WIN_CHECK(a) \
+	BOOL result = a; \
+	if(result == FALSE) \
+	{ \
+		assert(false); \
+	}
+
 void mist_Print(const char* message)
 {
 	printf("%s\n", message);
+}
+
+bool OpenDialog(char* path)
+{
+	OPENFILENAME openFileNameData =
+	{
+		.lStructSize = sizeof(OPENFILENAME),
+		.lpstrFile = path,
+		.nMaxFile = ARRAYSIZE(path),
+		.lpstrFilter = "All\0*.*\0Image\0*.png\0",
+		.nFilterIndex = 1,
+		.nMaxFileTitle = 0,
+		.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST
+	};
+	return GetOpenFileName(&openFileNameData);
+}
+
+bool SaveDialog(char* path)
+{
+	OPENFILENAME saveFileNameData =
+	{
+		.lStructSize = sizeof(OPENFILENAME),
+		.lpstrFile = path,
+		.nMaxFile = ARRAYSIZE(path),
+		.lpstrFilter = "All\0*.*\0Image\0*.png\0",
+		.nFilterIndex = 1,
+		.nMaxFileTitle = 0,
+		.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST
+	};
+	return GetSaveFileName(&saveFileNameData);
+}
+
+void GUI(void)
+{
+	const char* toolBars[] =
+	{
+		"Open",
+		"Save",
+		"Export"
+	};
+
+	enum mist_Toolbar
+	{
+		Toolbar_Open,
+		Toolbar_Save,
+		Toolbar_Export
+	};
+	
+	#define GUIConfig_ToolbarWidth 100.0f
+	#define GUIConfig_ToolbarHeight 40.0f
+	
+	int8_t selectedTab = GUI_Toolbar((mist_Vec2) { GUIConfig_ToolbarWidth * 0.5f, g_ScreenDimensions.y - GUIConfig_ToolbarHeight * 0.5f },
+							(mist_Vec2) { GUIConfig_ToolbarWidth, GUIConfig_ToolbarHeight }, toolBars, ARRAYSIZE(toolBars));
+	if (selectedTab == Toolbar_Open)
+	{
+		char path[256] = { 0 };
+		if (OpenDialog(path))
+		{
+			// TODO:
+		}
+	}
+	else if (selectedTab == Toolbar_Save)
+	{
+		char path[256] = { 0 };
+		if (SaveDialog(path))
+		{
+			// TODO:
+		}
+	}
 }
 
 HWND mist_CreateWindow(const char* windowName, bool showFullscreen, int width, int height, HINSTANCE hinstance, WNDPROC wndproc)
@@ -140,18 +226,58 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	case WM_CLOSE:
 		PostQuitMessage(0);
 		break;
+
+	case WM_LBUTTONDOWN:
+		g_MouseState = MouseState_Down;
+		break;
+
+	case WM_LBUTTONUP:
+		g_MouseState = MouseState_Up;
+		break;
+
+	case WM_SIZE:
+		g_ScreenDimensions =
+		(mist_Vec2)
+		{
+			.x = (float)LOWORD(lParam),
+			.y = (float)HIWORD(lParam)
+		};
+
+		g_IsMinimized = wParam == SIZE_MINIMIZED;
+		break;
+
+	case WM_MOUSEMOVE:
+	{
+		int xPoint = GET_X_LPARAM(lParam);
+		int yPoint = GET_Y_LPARAM(lParam);
+
+		g_MousePosition =
+		(mist_Vec2)
+		{
+			.x = (float)(xPoint),
+			.y = g_ScreenDimensions.y - (float)(yPoint)
+		};
+
+		break;
+	}
 	}
 
 	return (DefWindowProc(hWnd, uMsg, wParam, lParam));
 }
 
+void Input_Refresh(void)
+{
+	g_MouseState = g_MouseState == MouseState_Down ? MouseState_Held : g_MouseState;
+	g_MouseState = g_MouseState == MouseState_Up ? MouseState_None : g_MouseState;
+}
+
 #define SHOW_CONSOLE 1
 
 #if SHOW_CONSOLE
-#define MIST_WIN_PROC() \
-	int main()
+#define MIST_WIN_PROC(void) \
+	int main(void)
 #else
-#define MIST_WIN_PROC() \
+#define MIST_WIN_PROC(void) \
 	int CALLBACK WinMain(\
 	_In_ HINSTANCE mist_WinInstance, \
 	_In_ HINSTANCE prevInstance, \
@@ -159,20 +285,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	_In_ int       moreArgs)
 #endif
 
-MIST_WIN_PROC()
+MIST_WIN_PROC(void)
 {
 #if SHOW_CONSOLE
 	HINSTANCE mist_WinInstance = GetModuleHandle(NULL);
 #endif
 
 	// Config
-	#define		winConfig_IsFullscreen false
-	#define		winConfig_Width 900
-	#define		winConfig_Height 700
-	#define		winConfig_WindowName "Mist Vulkan"
+	#define winConfig_IsFullscreen false
+	#define winConfig_WindowName "Mist Vulkan"
 
-	HWND vulkanWindow = mist_CreateWindow(winConfig_WindowName, winConfig_IsFullscreen, winConfig_Width, winConfig_Height, mist_WinInstance, WndProc);
-	VkRenderer_Init(mist_WinInstance, vulkanWindow, winConfig_Width, winConfig_Height);
+	#define winConfig_Width 900
+	#define winConfig_Height 700
+
+	g_VulkanWindow = mist_CreateWindow(winConfig_WindowName, winConfig_IsFullscreen, winConfig_Width, winConfig_Height, mist_WinInstance, WndProc);
+	VkRenderer_Init(mist_WinInstance, g_VulkanWindow, winConfig_Width, winConfig_Height);
+
+	g_ScreenDimensions = (mist_Vec2) { .x = (float)winConfig_Width, .y = (float)winConfig_Height };
 
 	mist_Print("Creating descriptor pool...");
 
@@ -181,19 +310,14 @@ MIST_WIN_PROC()
 	bool quitMessageReceived = false;
 	while (!quitMessageReceived)
 	{
-		static float s = 0.0f;
-		static float d = 1.0f;
-		s += 0.001f * d;
+		if (!g_IsMinimized)
+		{
+			VkRenderer_ClearInstances();
+			GUI();
+			VkRenderer_Draw((uint32_t)g_ScreenDimensions.x, (uint32_t)g_ScreenDimensions.y);
+		}
 
-		if (s >= 1.0f || s <= -1.0) d *= -1.0f;
-
-
-		VkRenderer_ClearInstances();
-		VkRenderer_AddInstance(VkMesh_Rect, (mist_Vec2) { 0.0f, 0.0f }, (mist_Vec2) { 0.1f, 0.1f });
-		VkRenderer_AddInstance(VkMesh_Rect, (mist_Vec2) { s, 0.0f }, (mist_Vec2) { 0.1f, 0.1f });
-
-		VkRenderer_Draw();
-
+		Input_Refresh();
 		// Handle windows messages...
 		while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE))
 		{

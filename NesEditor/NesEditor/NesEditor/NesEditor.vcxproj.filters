@@ -24,6 +24,9 @@
     <ClCompile Include="VkRenderer.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="MistGUI.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="MistVk.h">
@@ -33,6 +36,15 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="VkAllocator.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="MistGUI.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="stb_image.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="FontFormat.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

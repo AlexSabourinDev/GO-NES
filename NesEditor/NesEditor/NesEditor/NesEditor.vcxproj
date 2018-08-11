@@ -109,6 +109,8 @@
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>C:\VulkanSDK\1.1.70.1\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <MinimalRebuild />
     </ClCompile>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -126,6 +128,8 @@
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>C:\VulkanSDK\1.1.70.1\Include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <TreatWarningAsError>true</TreatWarningAsError>
+      <WholeProgramOptimization>false</WholeProgramOptimization>
+      <MinimalRebuild />
     </ClCompile>
     <Link>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
@@ -135,11 +139,15 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="MistGUI.c" />
     <ClCompile Include="VkAllocator.c" />
     <ClCompile Include="main.c" />
     <ClCompile Include="VkRenderer.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="FontFormat.h" />
+    <ClInclude Include="MistGUI.h" />
+    <ClInclude Include="stb_image.h" />
     <ClInclude Include="VkAllocator.h" />
     <ClInclude Include="MistVk.h" />
     <ClInclude Include="VkRenderer.h" />

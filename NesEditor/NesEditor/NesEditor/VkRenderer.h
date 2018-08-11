@@ -18,13 +18,18 @@ typedef struct mist_Vec2
 	float x, y;
 } mist_Vec2;
 
+typedef struct mist_Color
+{
+	float r, g, b, a;
+} mist_Color;
+
 void VkRenderer_Init(HINSTANCE appInstance, HWND window, uint32_t surfaceWidth, uint32_t surfaceHeight);
-void VkRenderer_Kill();
+void VkRenderer_Kill(void);
 
-void VkRenderer_Draw();
+void VkRenderer_Draw(uint32_t surfaceWidth, uint32_t surfaceHeight);
 
-void VkRenderer_ClearInstances();
-void VkRenderer_AddInstance(mist_VkMesh mesh, mist_Vec2 position, mist_Vec2 scale);
+void VkRenderer_ClearInstances(void);
+void VkRenderer_AddInstance(mist_VkMesh mesh, mist_Vec2 position, mist_Vec2 scale, mist_Color color, const char* string);
 
 
 #endif // __VK_RENDERER_H

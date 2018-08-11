@@ -10,6 +10,12 @@
 #include "MistVk.h"
 #include "VkAllocator.h"
 
+#include "FontFormat.h"
+
+// stb
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
+
 // Config!
 #define		vkConfig_AppName "NesEditor"
 #define		vkConfig_EngineName "Mist"
@@ -40,7 +46,7 @@ const char*		vkConfig_ValidationLayers[] = { "VK_LAYER_LUNARG_standard_validatio
 
 extern void mist_Print(const char* message);
 
-typedef struct PhysicalDevice
+typedef struct mist_PhysicalDevice
 {
 	VkPhysicalDevice device;
 
@@ -60,7 +66,7 @@ typedef struct PhysicalDevice
 
 	VkPhysicalDeviceMemoryProperties memoryProperties;
 	VkPhysicalDeviceProperties properties;
-} PhysicalDevice;
+} mist_PhysicalDevice;
 
 // Globals!
 VkInstance g_VkInstance;
@@ -75,7 +81,7 @@ VkQueue g_VkPresentQueue;
 uint32_t g_VkGraphicsQueueIdx;
 uint32_t g_VkPresentQueueIdx;
 
-PhysicalDevice g_PhysicalDevices[vkConfig_MaxPhysicalDevices];
+mist_PhysicalDevice g_PhysicalDevices[vkConfig_MaxPhysicalDevices];
 uint32_t g_PhysicalDeviceCount;
 
 const char* g_ValidationLayers[vkConfig_MaxValidationLayers];
@@ -99,8 +105,11 @@ VkPipeline g_VkPipeline;
 
 VkDescriptorSetLayout g_VkDescriptorSetLayout;
 VkDescriptorPool g_VkDescriptorPools[vkConfig_BufferCount];
+VkDescriptorSet g_VkDescriptorSets[vkConfig_BufferCount];
 
 mist_VkAllocator g_VkAllocator;
+mist_VkAllocator g_VkImageAllocator;
+mist_PhysicalDevice* g_VkSelectedDevice;
 
 typedef struct mist_VkVertex
 {
@@ -111,6 +120,10 @@ typedef struct mist_VkInstance
 {
 	mist_Vec2 position;
 	mist_Vec2 scale;
+	mist_Color color;
+	unsigned int stringSize;
+	unsigned int stringBuffer[4];
+
 } mist_VkInstance;
 
 typedef struct mist_VkBuffer
@@ -128,12 +141,33 @@ typedef enum mist_VkShader
 } mist_VkShader;
 VkShaderModule g_VkShaders[VkShader_Count];
 
+typedef struct mist_VkImage
+{
+	mist_VkAlloc alloc;
+	VkImage image;
+	VkImageView imageView;
+	VkSampler sampler;
+} mist_VkImage;
+
+typedef struct mist_VkUniformBuffer
+{
+	mist_Vec2 surfaceDimensions;
+	unsigned int fontTileWidth;
+	unsigned int fontTileHeight;
+	unsigned int fontWidth;
+	unsigned int fontHeight;
+} mist_VkUniformBuffer;
+
 mist_VkBuffer g_VkMeshes[VkMesh_Count];
 mist_VkBuffer g_VkInstances[VkMesh_Count];
 
 mist_VkBuffer g_VkIndirectDrawBuffer;
 
-VkInstance CreateVkInstance()
+mist_VkBuffer g_VkDescriptorBuffers[vkConfig_BufferCount];
+
+mist_VkImage g_VkFontImage;
+
+VkInstance CreateVkInstance(void)
 {
 	mist_Print("Creating VkInstance...");
 
@@ -361,7 +395,7 @@ void EnumeratePhysicalDevices(
 
 void SelectBestPhysicalDevice(
 	VkSurfaceKHR surface, 
-	PhysicalDevice** selectedGPU, 
+	mist_PhysicalDevice** selectedGPU,
 	uint32_t* selectedGraphicsQueue, 
 	uint32_t* selectedPresentQueue)
 {
@@ -373,7 +407,7 @@ void SelectBestPhysicalDevice(
 	{
 		for (uint32_t i = 0; i < g_PhysicalDeviceCount; i++)
 		{
-			PhysicalDevice* physicalDevice = &g_PhysicalDevices[i];
+			mist_PhysicalDevice* physicalDevice = &g_PhysicalDevices[i];
 
 			int32_t graphicsQueue = -1;
 			int32_t presentQueue = -1;
@@ -589,6 +623,121 @@ void DestroyVkCommandBuffers(
 	vkDestroyCommandPool(device, pool, NO_ALLOCATOR);
 }
 
+VkCommandBuffer BeginOneTimeVkCommandBuffer(
+	VkDevice device,
+	VkCommandPool pool)
+{
+	VkCommandBuffer oneTimeBuffer;
+
+	VkCommandBufferAllocateInfo commandBufferAllocateInfo =
+	{
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+		.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+		.commandBufferCount = 1,
+		.commandPool = pool
+	};
+
+	VK_CHECK(vkAllocateCommandBuffers(device, &commandBufferAllocateInfo, &oneTimeBuffer));
+
+	VkCommandBufferBeginInfo beginBufferInfo =
+	{
+		.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
+	};
+	VK_CHECK(vkBeginCommandBuffer(oneTimeBuffer, &beginBufferInfo));
+
+	return oneTimeBuffer;
+}
+
+void EndOneTimeVkCommandBuffer(
+	VkDevice device,
+	VkCommandBuffer buffer,
+	VkQueue submissionQueue,
+	VkCommandPool pool)
+{
+	VK_CHECK(vkEndCommandBuffer(buffer));
+
+	VkSubmitInfo submitInfo =
+	{
+		.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+		.commandBufferCount = 1,
+		.pCommandBuffers = &buffer
+	};
+	VK_CHECK(vkQueueSubmit(submissionQueue, 1, &submitInfo, VK_NULL_HANDLE));
+	VK_CHECK(vkQueueWaitIdle(submissionQueue));
+
+	vkFreeCommandBuffers(device, pool, 1, &buffer);
+}
+
+void TransitionVkImageLayout(
+	VkImage image,
+	VkImageLayout oldLayout,
+	VkImageLayout newLayout,
+	VkCommandBuffer buffer)
+{
+	VkPipelineStageFlags sourceStage;
+	VkPipelineStageFlags destinationStage;
+
+	VkAccessFlagBits sourceAccessMask;
+	VkAccessFlagBits dstAccessMask;
+
+	if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED && newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) 
+	{
+		sourceAccessMask = 0;
+		dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+
+		sourceStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+		destinationStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+	}
+	else if (oldLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL && newLayout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL) 
+	{
+		sourceAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+		dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+		sourceStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+		destinationStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+	}
+	else 
+	{
+		assert(false);
+		return;
+	}
+
+	VkImageMemoryBarrier imageBarrier =
+	{
+		.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+		.oldLayout = oldLayout,
+		.newLayout = newLayout,
+		.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		.image = image,
+		.subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,.levelCount = 1, .baseMipLevel = 0, .baseArrayLayer = 0, .layerCount = 1},
+		.srcAccessMask = sourceAccessMask,
+		.dstAccessMask = dstAccessMask
+	};
+
+	vkCmdPipelineBarrier(buffer, sourceStage, destinationStage, 0, 0, NULL, 0, NULL, 1, &imageBarrier);
+}
+
+void CopyBufferToImage(
+	VkBuffer buffer,
+	VkImage image,
+	uint32_t width,
+	uint32_t height,
+	VkCommandBuffer commandBuffer)
+{
+	VkBufferImageCopy copyRegion = 
+	{
+		.bufferOffset = 0,
+		.bufferRowLength = 0,
+		.bufferImageHeight = 0,
+		.imageSubresource = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1},
+		.imageOffset = {.x = 0, .y = 0, .z = 0},
+		.imageExtent = {.width = width, .height = height, .depth = 1}
+	};
+
+	vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copyRegion);
+}
+
 void CreateVkFences(
 	VkDevice device, 
 	VkFence* fences, 
@@ -619,7 +768,7 @@ void DestroyVkFences(
 }
 
 VkSurfaceFormatKHR SelectVkSurfaceFormat(
-	PhysicalDevice* physicalDevice)
+	mist_PhysicalDevice* physicalDevice)
 {
 	mist_Print("Selecting surface format...");
 	if (0 == physicalDevice->surfaceFormatCount)
@@ -631,7 +780,7 @@ VkSurfaceFormatKHR SelectVkSurfaceFormat(
 	VkSurfaceFormatKHR surfaceFormat = { 0 };
 	if (1 == physicalDevice->surfaceFormatCount && VK_FORMAT_UNDEFINED == physicalDevice->surfaceFormats[0].format)
 	{
-		surfaceFormat.format = VK_FORMAT_B8G8R8A8_UNORM;
+		surfaceFormat.format = VK_FORMAT_R8G8B8A8_UNORM;
 		surfaceFormat.colorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
 	}
 	else
@@ -639,7 +788,7 @@ VkSurfaceFormatKHR SelectVkSurfaceFormat(
 		surfaceFormat = physicalDevice->surfaceFormats[0];
 		for (uint32_t i = 0; i < physicalDevice->surfaceFormatCount; i++)
 		{
-			if (VK_FORMAT_B8G8R8A8_UNORM == physicalDevice->surfaceFormats[i].format && VK_COLORSPACE_SRGB_NONLINEAR_KHR == physicalDevice->surfaceFormats[i].colorSpace)
+			if (VK_FORMAT_R8G8B8A8_UNORM == physicalDevice->surfaceFormats[i].format && VK_COLORSPACE_SRGB_NONLINEAR_KHR == physicalDevice->surfaceFormats[i].colorSpace)
 			{
 				surfaceFormat = physicalDevice->surfaceFormats[i];
 				break;
@@ -651,7 +800,10 @@ VkSurfaceFormatKHR SelectVkSurfaceFormat(
 	return surfaceFormat;
 }
 
-VkExtent2D CreateSurfaceExtents(PhysicalDevice* device, uint32_t width, uint32_t height)
+VkExtent2D CreateSurfaceExtents(
+	mist_PhysicalDevice* device,
+	uint32_t width,
+	uint32_t height)
 {
 	mist_Print("Selecting surface extents...");
 	VkSurfaceCapabilitiesKHR const* surfaceCapabilities = &device->surfaceCapabilities;
@@ -672,7 +824,7 @@ VkExtent2D CreateSurfaceExtents(PhysicalDevice* device, uint32_t width, uint32_t
 }
 
 VkSwapchainKHR CreateVkSwapchain(
-	PhysicalDevice* physicalDevice, 
+	mist_PhysicalDevice* physicalDevice,
 	VkDevice device, 
 	VkSurfaceKHR surface, 
 	VkSurfaceFormatKHR surfaceFormat, 
@@ -751,7 +903,7 @@ VkRenderPass CreateVkRenderPass(
 	VkAttachmentDescription colorAttachment =
 	{
 		.samples = VK_SAMPLE_COUNT_1_BIT,
-		.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+		.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
 		.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
 		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
 		.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
@@ -772,12 +924,23 @@ VkRenderPass CreateVkRenderPass(
 		.pColorAttachments = &colorReference
 	};
 
+	VkSubpassDependency dependency = 
+	{
+		.srcSubpass = VK_SUBPASS_EXTERNAL,
+		.dstSubpass = 0,
+		.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		.srcAccessMask = 0,
+		.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+		.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+	};
+
 	VkRenderPassCreateInfo createRenderPass =
 	{
 		.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
 		.attachmentCount = ARRAYSIZE(renderPassAttachments),
 		.subpassCount = 1,
-		.dependencyCount = 0,
+		.dependencyCount = 1,
+		.pDependencies = &dependency,
 		.pAttachments = renderPassAttachments,
 		.pSubpasses = &subpass
 	};
@@ -789,7 +952,9 @@ VkRenderPass CreateVkRenderPass(
 	return vkRenderPass;
 }
 
-void DestroyVkRenderPass(VkDevice device, VkRenderPass renderPass)
+void DestroyVkRenderPass(
+	VkDevice device,
+	VkRenderPass renderPass)
 {
 	vkDestroyRenderPass(device, renderPass, NO_ALLOCATOR);
 }
@@ -874,7 +1039,11 @@ void CreateVkFramebuffers(
 	mist_Print("Created framebuffers!");
 }
 
-void DestroyVkFramebuffers(VkDevice device, VkFramebuffer* framebuffers, VkImageView* swapchainImages, uint32_t bufferCount)
+void DestroyVkFramebuffers(
+	VkDevice device,
+	VkFramebuffer* framebuffers,
+	VkImageView* swapchainImages,
+	uint32_t bufferCount)
 {
 	for (uint32_t i = 0; i < bufferCount; i++)
 	{
@@ -887,7 +1056,9 @@ void DestroyVkFramebuffers(VkDevice device, VkFramebuffer* framebuffers, VkImage
 	}
 }
 
-VkShaderModule CreateVkShader(VkDevice device, const char* shaderPath)
+VkShaderModule CreateVkShader(
+	VkDevice device, 
+	const char* shaderPath)
 {
 	FILE* file = fopen(shaderPath, "rb");
 
@@ -914,7 +1085,8 @@ VkShaderModule CreateVkShader(VkDevice device, const char* shaderPath)
 	return shader;
 }
 
-void CreateVkShaders(VkDevice device)
+void CreateVkShaders(
+	VkDevice device)
 {
 	mist_Print("Initializing shader...");
 	g_VkShaders[VkShader_DefaultVert] = CreateVkShader(device, "../../Assets/Shaders/SPIR-V/default.vspv");
@@ -922,7 +1094,8 @@ void CreateVkShaders(VkDevice device)
 	mist_Print("Shaders intialized!");
 }
 
-void DestroyVkShaders(VkDevice device)
+void DestroyVkShaders(
+	VkDevice device)
 {
 	for (uint32_t i = 0; i < VkShader_Count; i++)
 	{
@@ -934,11 +1107,34 @@ VkDescriptorSetLayout CreateVkDescriptorSetLayout(
 	VkDevice device)
 {
 	mist_Print("Creating descriptor layout...");
+
+	VkDescriptorSetLayoutBinding screenSizeBinding =
+	{
+		.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+		.binding = 0,
+		.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+		.descriptorCount = 1
+	};
+
+	VkDescriptorSetLayoutBinding fontImageBinding =
+	{
+		.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+		.binding = 1,
+		.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+		.descriptorCount = 1
+	};
+
+
+	VkDescriptorSetLayoutBinding layoutBindings[] = 
+	{
+		screenSizeBinding,
+		fontImageBinding
+	};
 	VkDescriptorSetLayoutCreateInfo layoutCreate =
 	{
 		.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-		.bindingCount = 0,
-		.pBindings = NULL
+		.bindingCount = 2,
+		.pBindings = layoutBindings
 	};
 
 	VkDescriptorSetLayout descriptorSetLayout;
@@ -981,6 +1177,7 @@ VkPipelineLayout CreateVkPipelineLayout(
 	VkDescriptorSetLayout descriptorSetLayout)
 {
 	mist_Print("Creating pipeline layout...");
+
 	VkPipelineLayoutCreateInfo pipelineLayoutCreate =
 	{
 		.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
@@ -1041,7 +1238,7 @@ VkPipeline CreateVkPipeline(
 	VkVertexInputAttributeDescription vertexPositionAttribute =
 	{
 		.binding = vkConfig_VertexBinding,
-		.format = VK_FORMAT_R32G32B32_SFLOAT,
+		.format = VK_FORMAT_R32G32_SFLOAT,
 		.location = 0,
 		.offset = offsetof(mist_VkVertex, position)
 	};
@@ -1049,7 +1246,7 @@ VkPipeline CreateVkPipeline(
 	VkVertexInputAttributeDescription instancePositionAttribute =
 	{
 		.binding = vkConfig_InstanceBinding,
-		.format = VK_FORMAT_R32G32B32_SFLOAT,
+		.format = VK_FORMAT_R32G32_SFLOAT,
 		.location = 1,
 		.offset = offsetof(mist_VkInstance, position)
 	};
@@ -1057,16 +1254,43 @@ VkPipeline CreateVkPipeline(
 	VkVertexInputAttributeDescription instanceScaleAttribute =
 	{
 		.binding = vkConfig_InstanceBinding,
-		.format = VK_FORMAT_R32G32B32_SFLOAT,
+		.format = VK_FORMAT_R32G32_SFLOAT,
 		.location = 2,
 		.offset = offsetof(mist_VkInstance, scale)
+	};
+
+	VkVertexInputAttributeDescription instanceColorAttribute =
+	{
+		.binding = vkConfig_InstanceBinding,
+		.format = VK_FORMAT_R32G32B32A32_SFLOAT,
+		.location = 3,
+		.offset = offsetof(mist_VkInstance, color)
+	};
+
+	VkVertexInputAttributeDescription instanceStringSize =
+	{
+		.binding = vkConfig_InstanceBinding,
+		.format = VK_FORMAT_R32_UINT,
+		.location = 4,
+		.offset = offsetof(mist_VkInstance, stringSize)
+	};
+
+	VkVertexInputAttributeDescription instanceStringBuffer =
+	{
+		.binding = vkConfig_InstanceBinding,
+		.format = VK_FORMAT_R32G32B32A32_UINT,
+		.location = 5,
+		.offset = offsetof(mist_VkInstance, stringBuffer)
 	};
 
 	VkVertexInputAttributeDescription inputAttributes[] =
 	{
 		vertexPositionAttribute,
 		instancePositionAttribute,
-		instanceScaleAttribute
+		instanceScaleAttribute,
+		instanceColorAttribute,
+		instanceStringSize,
+		instanceStringBuffer
 	};
 
 	VkPipelineVertexInputStateCreateInfo vertexInputCreate =
@@ -1216,21 +1440,27 @@ VkPipeline CreateVkPipeline(
 	return pipeline;
 }
 
-void DestroyVkPipeline(VkDevice device, VkPipeline pipeline)
+void DestroyVkPipeline(
+	VkDevice device,
+	VkPipeline pipeline)
 {
 	vkDestroyPipeline(device, pipeline, NO_ALLOCATOR);
 }
 
-uint32_t FindMemoryIndex(PhysicalDevice* physicalDevice, VkMemoryPropertyFlags requiredFlags, VkMemoryPropertyFlags preferedFlags)
+uint32_t FindMemoryIndex(
+	mist_PhysicalDevice* physicalDevice,
+	uint32_t typeBits,
+	VkMemoryPropertyFlags requiredFlags,
+	VkMemoryPropertyFlags preferedFlags)
 {
 	uint32_t preferedMemoryIndex = UINT32_MAX;
 	VkMemoryType* types = physicalDevice->memoryProperties.memoryTypes;
 
 	for (uint32_t i = 0; i < physicalDevice->memoryProperties.memoryTypeCount; ++i)
 	{
-		if ((types[i].propertyFlags & (requiredFlags | preferedFlags)) == (requiredFlags | preferedFlags))
+		if ((typeBits & (1 << i)) && (types[i].propertyFlags & (requiredFlags | preferedFlags)) == (requiredFlags | preferedFlags))
 		{
-			return types[i].heapIndex;
+			return i;
 		}
 	}
 
@@ -1238,7 +1468,7 @@ uint32_t FindMemoryIndex(PhysicalDevice* physicalDevice, VkMemoryPropertyFlags r
 	{
 		for (uint32_t i = 0; i < physicalDevice->memoryProperties.memoryTypeCount; ++i)
 		{
-			if ((types[i].propertyFlags & requiredFlags) == requiredFlags)
+			if ((typeBits & (1 << i)) && (types[i].propertyFlags & requiredFlags) == requiredFlags)
 			{
 				return i;
 			}
@@ -1248,13 +1478,74 @@ uint32_t FindMemoryIndex(PhysicalDevice* physicalDevice, VkMemoryPropertyFlags r
 	return UINT32_MAX;
 }
 
+void InitVkAllocators(
+	mist_PhysicalDevice* physicalDevice,
+	VkDevice device)
+{
+	mist_Print("Initializing allocator...");
+	mist_InitVkAllocator(&g_VkAllocator, device, 1024 * 1024 * 10, 
+		FindMemoryIndex(physicalDevice, UINT32_MAX, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), mist_AllocatorHostVisible);
+	mist_InitVkAllocator(&g_VkImageAllocator, device, 1024 * 1024 * 10,
+		FindMemoryIndex(physicalDevice, 258, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0), mist_AllocatorNone);
+	mist_Print("Initialized allocator!");
+}
+
+void KillVkAllocators(
+	VkDevice device)
+{
+	mist_Print("Cleaning up allocator!");
+	mist_CleanupVkAllocator(&g_VkAllocator, device);
+	mist_CleanupVkAllocator(&g_VkImageAllocator, device);
+	mist_Print("Cleaned up allocator!");
+}
+
+mist_VkBuffer CreateVkBuffer(
+	VkDevice device,
+	mist_VkAllocator* allocator,
+	void* data, VkDeviceSize size,
+	VkBufferUsageFlags usage)
+{
+	VkBufferCreateInfo bufferCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+		.size = size,
+		.usage = usage
+	};
+
+	VkBuffer buffer;
+	VK_CHECK(vkCreateBuffer(device, &bufferCreate, NO_ALLOCATOR, &buffer));
+
+	VkMemoryRequirements memoryRequirements;
+	vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
+
+	mist_VkAlloc allocation = mist_VkAllocate(allocator, memoryRequirements.size, memoryRequirements.alignment);
+	VK_CHECK(vkBindBufferMemory(device, buffer, allocation.memory, allocation.offset));
+
+	void* mappedMemory = mist_VkMapMemory(allocator, allocation);
+
+	if (data != NULL)
+	{
+		memcpy(mappedMemory, data, size);
+	}
+	return (mist_VkBuffer) { .alloc = allocation, .mappedMem = mappedMemory, .buffer = buffer };
+}
+
+void DestroyVkBuffer(
+	VkDevice device,
+	mist_VkAllocator* allocator,
+	mist_VkBuffer buffer)
+{
+	vkDestroyBuffer(device, buffer.buffer, NO_ALLOCATOR);
+	mist_VkFree(allocator, buffer.alloc);
+}
+
 void CreateVkDescriptorPools(
-	VkDevice device, 
-	VkDescriptorPool* descriptorPools, 
+	VkDevice device,
+	VkDescriptorPool* descriptorPools,
 	uint32_t poolCount)
 {
-	#define vkConfig_MaxUniformBufferCount 1000
-	#define vkConfig_MaxImageSamples 1000
+#define vkConfig_MaxUniformBufferCount 1000
+#define vkConfig_MaxImageSamples 1000
 	VkDescriptorPoolSize descriptorPoolSizes[2] =
 	{
 		{ .type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,.descriptorCount = vkConfig_MaxUniformBufferCount },
@@ -1278,7 +1569,10 @@ void CreateVkDescriptorPools(
 	mist_Print("Created descriptor pool!");
 }
 
-void DestroyVkDescriptorPools(VkDevice device, VkDescriptorPool* descriptorPools, uint32_t poolCount)
+void DestroyVkDescriptorPools(
+	VkDevice device,
+	VkDescriptorPool* descriptorPools,
+	uint32_t poolCount)
 {
 	for (uint32_t i = 0; i < poolCount; i++)
 	{
@@ -1287,32 +1581,163 @@ void DestroyVkDescriptorPools(VkDevice device, VkDescriptorPool* descriptorPools
 	}
 }
 
-void InitVkAllocator(
-	PhysicalDevice* physicalDevice, 
-	VkDevice device)
+void CreateVkDescriptorSet(
+	VkDevice device,
+	mist_VkAllocator* allocator,
+	uint32_t surfaceWidth,
+	uint32_t surfaceHeight,
+	mist_VkImage* fontImage,
+	VkDescriptorSetLayout descriptorSetLayout, 
+	mist_VkBuffer* descriptorBuffers,
+	VkDescriptorPool* descriptorPools,
+	VkDescriptorSet* descriptorSets,
+	uint32_t descriptorSetCount)
 {
-	VkMemoryPropertyFlags requiredFlags = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-	VkMemoryPropertyFlags preferedFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+	mist_VkUniformBuffer uniformBuffer =
+	{
+		.surfaceDimensions = {.x = (float)surfaceWidth,.y = (float)surfaceHeight },
+		.fontTileWidth = mist_FontTileWidth,
+		.fontTileHeight = mist_FontTileHeight,
+		.fontWidth = mist_FontWidth,
+		.fontHeight = mist_FontHeight
+	};
 
-	mist_Print("Initializing allocator...");
-	mist_InitVkAllocator(&g_VkAllocator, device, 1024 * 1024, FindMemoryIndex(physicalDevice, requiredFlags, preferedFlags), mist_AllocatorHostVisible);
-	mist_Print("Initialized allocator!");
+	for (uint32_t i = 0; i < descriptorSetCount; i++)
+	{
+		descriptorBuffers[i] = CreateVkBuffer(device, allocator, &uniformBuffer, sizeof(mist_VkUniformBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+
+		VkDescriptorSetAllocateInfo descriptorSetAlloc =
+		{
+			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+			.descriptorPool = descriptorPools[i],
+			.descriptorSetCount = 1,
+			.pSetLayouts = &descriptorSetLayout
+		};
+		VK_CHECK(vkAllocateDescriptorSets(device, &descriptorSetAlloc, &descriptorSets[i]));
+
+		VkDescriptorBufferInfo bufferInfo =
+		{
+			.buffer = descriptorBuffers[i].buffer,
+			.offset = 0,
+			.range = sizeof(mist_VkUniformBuffer)
+		};
+
+		// Binding 0 : Vertex shader uniform buffer
+		VkWriteDescriptorSet writeVertexUniformDescriptorSet =
+		{
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = descriptorSets[i],
+			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			.dstBinding = 0,
+			.descriptorCount = 1,
+			.pBufferInfo = &bufferInfo
+		};
+
+		VkDescriptorImageInfo imageInfo =
+		{
+			.imageView = fontImage->imageView,
+			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			.sampler = fontImage->sampler
+		};
+
+		VkWriteDescriptorSet writeImageDescriptorSet =
+		{
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = descriptorSets[i],
+			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.dstBinding = 1,
+			.descriptorCount = 1,
+			.pImageInfo = &imageInfo
+		};
+
+		VkWriteDescriptorSet writeDescriptorSets[] =
+		{
+			writeVertexUniformDescriptorSet,
+			writeImageDescriptorSet
+		};
+
+		vkUpdateDescriptorSets(device, ARRAYSIZE(writeDescriptorSets), writeDescriptorSets, 0, NULL);
+	}
 }
 
-void KillVkAllocator(
-	VkDevice device)
+void DestroyVkDescriptorSets(
+	VkDevice device, 
+	mist_VkAllocator* allocator, 
+	mist_VkBuffer* buffers, 
+	uint32_t bufferCount)
 {
-	mist_Print("Cleaning up allocator!");
-	mist_CleanupVkAllocator(&g_VkAllocator, device);
-	mist_Print("Cleaned up allocator!");
+	for (uint32_t i = 0; i < bufferCount; i++)
+	{
+		DestroyVkBuffer(device, allocator, buffers[i]);
+	}
 }
 
-void RecordCommandBuffers(uint32_t surfaceWidth, uint32_t surfaceHeight)
+void UpdateVkDescriptorSets(
+	VkDevice device,
+	uint32_t surfaceWidth,
+	uint32_t surfaceHeight,
+	mist_VkImage* fontImage,
+	mist_VkBuffer* descriptorBuffers,
+	VkDescriptorSet* descriptorSets,
+	uint32_t descriptorSetCount)
 {
-	static VkDescriptorSet s_DescriptorSets[vkConfig_BufferCount];
+	for (uint32_t i = 0; i < descriptorSetCount; i++)
+	{
+		mist_VkUniformBuffer* uniformBuffer = (mist_VkUniformBuffer*)descriptorBuffers[i].mappedMem;
+		uniformBuffer->surfaceDimensions = (mist_Vec2){ .x = (float)surfaceWidth,.y = (float)surfaceHeight };
+		memcpy((uint8_t*)descriptorBuffers[i].mappedMem + offsetof(mist_VkUniformBuffer, surfaceDimensions), uniformBuffer, sizeof(mist_Vec2));
 
+		VkDescriptorBufferInfo bufferInfo =
+		{
+			.buffer = descriptorBuffers[i].buffer,
+			.offset = 0,
+			.range = sizeof(float) * 2
+		};
+
+		// Binding 0 : Vertex shader uniform buffer
+		VkWriteDescriptorSet writeVertexUniformDescriptorSet =
+		{
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = descriptorSets[i],
+			.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+			.dstBinding = 0,
+			.descriptorCount = 1,
+			.pBufferInfo = &bufferInfo
+		};
+
+		VkDescriptorImageInfo imageInfo = 
+		{
+			.imageView = fontImage->imageView,
+			.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			.sampler = fontImage->sampler
+		};
+
+		VkWriteDescriptorSet writeImageDescriptorSet =
+		{
+			.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+			.dstSet = descriptorSets[i],
+			.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+			.dstBinding = 1,
+			.descriptorCount = 1,
+			.pImageInfo = &imageInfo
+		};
+
+		VkWriteDescriptorSet writeDescriptorSets[] =
+		{
+			writeVertexUniformDescriptorSet,
+			writeImageDescriptorSet
+		};
+
+		vkUpdateDescriptorSets(device, ARRAYSIZE(writeDescriptorSets), writeDescriptorSets, 0, NULL);
+	}
+}
+
+void RecordCommandBuffers(void)
+{
 	for (uint32_t i = 0; i < vkConfig_BufferCount; i++)
 	{
+		VK_CHECK(vkResetCommandBuffer(g_GraphicsCommandBuffers[i], 0));
+
 		VkCommandBufferBeginInfo beginBufferInfo =
 		{
 			.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
@@ -1354,32 +1779,8 @@ void RecordCommandBuffers(uint32_t surfaceWidth, uint32_t surfaceHeight)
 		};
 		vkCmdBeginRenderPass(g_GraphicsCommandBuffers[i], &renderPassBeginInfo, VK_SUBPASS_CONTENTS_INLINE);
 
-		VkClearAttachment clearAttachment =
-		{
-			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-			.colorAttachment = 0,
-			.clearValue = { .color = clearColor }
-		};
-
-		VkClearRect clearRect =
-		{
-			.baseArrayLayer = 0,
-			.layerCount = 1,
-			.rect = { .offset = { 0, 0 },.extent = { surfaceWidth, surfaceHeight } }
-		};
-		vkCmdClearAttachments(g_GraphicsCommandBuffers[i], 1, &clearAttachment, 1, &clearRect);
-
 		// Setup the pipeline
-		VkDescriptorSetAllocateInfo descriptorSetAlloc =
-		{
-			.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
-			.descriptorPool = g_VkDescriptorPools[i],
-			.descriptorSetCount = 1,
-			.pSetLayouts = &g_VkDescriptorSetLayout
-		};
-		VK_CHECK(vkAllocateDescriptorSets(g_VkDevice, &descriptorSetAlloc, &s_DescriptorSets[i]));
-		VkDescriptorSet descriptorSet = s_DescriptorSets[i];
-		vkCmdBindDescriptorSets(g_GraphicsCommandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_VkPipelineLayout, 0, 1, &descriptorSet, 0, NULL);
+		vkCmdBindDescriptorSets(g_GraphicsCommandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_VkPipelineLayout, 0, 1, &g_VkDescriptorSets[i], 0, NULL);
 
 		vkCmdBindPipeline(g_GraphicsCommandBuffers[i], VK_PIPELINE_BIND_POINT_GRAPHICS, g_VkPipeline);
 
@@ -1395,48 +1796,44 @@ void RecordCommandBuffers(uint32_t surfaceWidth, uint32_t surfaceHeight)
 	}
 }
 
-mist_VkBuffer CreateVkBuffer(VkDevice device, mist_VkAllocator* allocator, void* data, VkDeviceSize size, VkBufferUsageFlags usage)
+void RecreateVkSwapchain(
+	uint32_t surfaceWidth,
+	uint32_t surfaceHeight)
 {
-	VkBufferCreateInfo bufferCreate =
-	{
-		.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-		.size = size,
-		.usage = usage
-	};
+	vkDeviceWaitIdle(g_VkDevice);
 
-	VkBuffer buffer;
-	VK_CHECK(vkCreateBuffer(device, &bufferCreate, NO_ALLOCATOR, &buffer));
+	DestroyVkPipeline(g_VkDevice, g_VkPipeline);
 
-	VkMemoryRequirements memoryRequirements;
-	vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
+	DestroyVkFramebuffers(g_VkDevice, g_VkFramebuffers, g_VkSwapchainImages, vkConfig_BufferCount);
 
-	mist_VkAlloc allocation = mist_VkAllocate(allocator, memoryRequirements.size, memoryRequirements.alignment);
-	VK_CHECK(vkBindBufferMemory(device, buffer, allocation.memory, allocation.offset));
+	VK_CHECK(vkResetCommandPool(g_VkDevice, g_GraphicsCommandPool, 0));
+	DestroyVkSwapchain(g_VkDevice, g_VkSwapchain);
 
-	void* mappedMemory = mist_VkMapMemory(allocator, allocation);
+	VK_CHECK(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_VkSelectedDevice->device, g_VkSurface, &g_VkSelectedDevice->surfaceCapabilities));
+	VK_CHECK(vkGetPhysicalDeviceSurfaceFormatsKHR(g_VkSelectedDevice->device, g_VkSurface, &g_VkSelectedDevice->surfaceFormatCount, g_VkSelectedDevice->surfaceFormats));
+	VkSurfaceFormatKHR surfaceFormat = SelectVkSurfaceFormat(g_VkSelectedDevice);
+	g_VkSurfaceExtents = CreateSurfaceExtents(g_VkSelectedDevice, surfaceWidth, surfaceHeight);
+	g_VkSwapchain = CreateVkSwapchain(g_VkSelectedDevice, g_VkDevice, g_VkSurface, surfaceFormat, g_VkSurfaceExtents, g_VkGraphicsQueueIdx, g_VkPresentQueueIdx, vkConfig_BufferCount);
 
-	if (data != NULL)
-	{
-		memcpy(mappedMemory, data, size);
-	}
-	return (mist_VkBuffer) { .alloc = allocation, .mappedMem = mappedMemory, .buffer = buffer };
+	CreateVkFramebuffers(g_VkDevice, g_VkSwapchain, surfaceFormat, g_VkRenderPass, g_VkSurfaceExtents, g_VkFramebuffers, g_VkSwapchainImages, vkConfig_BufferCount);
+	UpdateVkDescriptorSets(g_VkDevice, surfaceWidth, surfaceHeight, &g_VkFontImage, g_VkDescriptorBuffers, g_VkDescriptorSets, vkConfig_BufferCount);
+
+	g_VkPipeline = CreateVkPipeline(g_VkDevice, g_VkRenderPass, g_VkShaders[VkShader_DefaultVert], g_VkShaders[VkShader_DefaultFrag], g_VkPipelineCache, g_VkPipelineLayout, surfaceWidth, surfaceHeight);
+
+	RecordCommandBuffers();
 }
 
-void DestroyVkBuffer(VkDevice device, mist_VkAllocator* allocator, mist_VkBuffer buffer)
-{
-	vkDestroyBuffer(device, buffer.buffer, NO_ALLOCATOR);
-	mist_VkFree(allocator, buffer.alloc);
-}
-
-void CreateVkMeshes(VkDevice device, mist_VkAllocator* allocator)
+void CreateVkMeshes(
+	VkDevice device, 
+	mist_VkAllocator* allocator)
 {
 	// Rect
 	mist_VkVertex vertices[] =
 	{
-		{ .position = { -1.0f, -1.0f } },
-		{ .position = { -1.0f,  1.0f } },
-		{ .position = {  1.0f, -1.0f } },
-		{ .position = {  1.0f,  1.0f } }
+		{ .position = { -0.5f,  0.5f } },
+		{ .position = { -0.5f, -0.5f } },
+		{ .position = {  0.5f,  0.5f } },
+		{ .position = {  0.5f, -0.5f } }
 	};
 
 	VkDrawIndirectCommand indirectDraws[VkMesh_Count] = 
@@ -1449,11 +1846,129 @@ void CreateVkMeshes(VkDevice device, mist_VkAllocator* allocator)
 	g_VkInstances[VkMesh_Rect] = CreateVkBuffer(device, allocator, NULL, sizeof(mist_VkInstance) * vkConfig_MaxInstanceCount, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 }
 
-void DestroyVkMeshes(VkDevice device, mist_VkAllocator* allocator)
+void DestroyVkMeshes(
+	VkDevice device, 
+	mist_VkAllocator* allocator)
 {
 	DestroyVkBuffer(device, allocator, g_VkMeshes[VkMesh_Rect]);
 	DestroyVkBuffer(device, allocator, g_VkInstances[VkMesh_Rect]);
 	DestroyVkBuffer(device, allocator, g_VkIndirectDrawBuffer);
+}
+
+mist_VkImage CreateVkImage(
+	VkDevice device,
+	mist_VkAllocator* imageAllocator,
+	mist_VkAllocator* bufferAllocator,
+	void* memory,
+	uint32_t x,
+	uint32_t y,
+	uint32_t n,
+	VkCommandPool commandPool,
+	VkQueue imageQueue)
+{
+	VkFormatProperties formatProps;
+	vkGetPhysicalDeviceFormatProperties(g_VkSelectedDevice->device, VK_FORMAT_R8G8B8A8_UNORM, &formatProps);
+
+	VkImageCreateInfo imageCreate =
+	{
+		.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+		.imageType = VK_IMAGE_TYPE_2D,
+		.format = VK_FORMAT_R8G8B8A8_UNORM,
+		.extent = { .width = x,.height = y,.depth = 1 },
+		.mipLevels = 1,
+		.arrayLayers = 1,
+		.samples = VK_SAMPLE_COUNT_1_BIT,
+		.tiling = VK_IMAGE_TILING_OPTIMAL,
+		.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT ,
+		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+		.sharingMode = VK_SHARING_MODE_EXCLUSIVE
+	};
+
+	VkImage createdImage;
+	VK_CHECK(vkCreateImage(device, &imageCreate, NO_ALLOCATOR, &createdImage));
+
+	VkMemoryRequirements memReq;
+	vkGetImageMemoryRequirements(device, createdImage, &memReq);
+
+	mist_VkAlloc imageAlloc = mist_VkAllocate(imageAllocator, memReq.size, memReq.alignment);
+	VK_CHECK(vkBindImageMemory(device, createdImage, imageAlloc.memory, imageAlloc.offset));
+
+	mist_VkBuffer imageBuffer = CreateVkBuffer(device, bufferAllocator, memory, x*y*n, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+	VkCommandBuffer imageCopyCommandBuffer = BeginOneTimeVkCommandBuffer(device, commandPool);
+	TransitionVkImageLayout(createdImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, imageCopyCommandBuffer);
+	CopyBufferToImage(imageBuffer.buffer, createdImage, x, y, imageCopyCommandBuffer);
+	TransitionVkImageLayout(createdImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, imageCopyCommandBuffer);
+	EndOneTimeVkCommandBuffer(device, imageCopyCommandBuffer, imageQueue, commandPool);
+	DestroyVkBuffer(device, bufferAllocator, imageBuffer);
+
+	VkImageViewCreateInfo  imageCreateViewInfo =
+	{
+		.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+		.image = createdImage,
+		.viewType = VK_IMAGE_VIEW_TYPE_2D,
+		.format = VK_FORMAT_R8G8B8A8_UNORM,
+
+		.components = { .r = VK_COMPONENT_SWIZZLE_R,.g = VK_COMPONENT_SWIZZLE_G,.b = VK_COMPONENT_SWIZZLE_B,.a = VK_COMPONENT_SWIZZLE_A },
+		.subresourceRange =
+		{
+			.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+			.levelCount = 1,
+			.layerCount = 1,
+			.baseMipLevel = 0
+		}
+	};
+
+	VkImageView createdImageView;
+	VK_CHECK(vkCreateImageView(device, &imageCreateViewInfo, NO_ALLOCATOR, &createdImageView));
+
+	VkSamplerCreateInfo samplerCreate = 
+	{
+		.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+		.magFilter = VK_FILTER_LINEAR,
+		.minFilter = VK_FILTER_LINEAR,
+		.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+		.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+		.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+		.anisotropyEnable = VK_FALSE,
+		.maxAnisotropy = 0,
+		.borderColor = VK_BORDER_COLOR_INT_OPAQUE_BLACK,
+		.compareEnable = VK_FALSE,
+		.compareOp = VK_COMPARE_OP_ALWAYS,
+		.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+		.mipLodBias = 0.0f,
+		.minLod = 0.0f,
+		.maxLod = 0.0f
+	};
+
+	VkSampler imageSampler;
+	VK_CHECK(vkCreateSampler(device, &samplerCreate, NO_ALLOCATOR, &imageSampler));
+
+	return (mist_VkImage) { .alloc = imageAlloc, .image = createdImage, .imageView = createdImageView, .sampler = imageSampler};
+}
+
+void DestroyVkImage(VkDevice device, mist_VkImage* image)
+{
+	vkDestroySampler(device, image->sampler, NO_ALLOCATOR);
+	vkDestroyImageView(device, image->imageView, NO_ALLOCATOR);
+	vkDestroyImage(device, image->image, NO_ALLOCATOR);
+}
+
+mist_VkImage InitFont(
+	VkDevice device, 
+	mist_VkAllocator* imageAllocator,
+	mist_VkAllocator* bufferAllocator,
+	VkCommandPool commandPool,
+	VkQueue commandQueue)
+{
+	Font_InitIndices();
+
+	int x, y, n;
+	stbi_uc* imageData = stbi_load("../../Assets/Images/CourierNew.bmp", &x, &y, &n, STBI_rgb_alpha);
+
+	mist_VkImage image = CreateVkImage(device, imageAllocator, bufferAllocator, imageData, x, y, STBI_rgb_alpha, commandPool, commandQueue);
+
+	stbi_image_free(imageData);
+	return image;
 }
 
 void VkRenderer_Init(
@@ -1466,9 +1981,8 @@ void VkRenderer_Init(
 	g_VkSurface = CreateVkSurface(appInstance, window, g_VkInstance);
 	EnumeratePhysicalDevices(g_VkInstance, g_VkSurface);
 
-	PhysicalDevice* selectedDevice;
-	SelectBestPhysicalDevice(g_VkSurface, &selectedDevice, &g_VkGraphicsQueueIdx, &g_VkPresentQueueIdx);
-	CreateVkLogicDevice(selectedDevice->device, g_VkGraphicsQueueIdx, g_VkPresentQueueIdx, &g_VkDevice, &g_VkGraphicsQueue, &g_VkPresentQueue);
+	SelectBestPhysicalDevice(g_VkSurface, &g_VkSelectedDevice, &g_VkGraphicsQueueIdx, &g_VkPresentQueueIdx);
+	CreateVkLogicDevice(g_VkSelectedDevice->device, g_VkGraphicsQueueIdx, g_VkPresentQueueIdx, &g_VkDevice, &g_VkGraphicsQueue, &g_VkPresentQueue);
 
 	CreateVkSemaphores(g_VkDevice, g_AcquireSemaphores, vkConfig_BufferCount);
 	CreateVkSemaphores(g_VkDevice, g_FrameCompleteSemaphores, vkConfig_BufferCount);
@@ -1476,32 +1990,37 @@ void VkRenderer_Init(
 	CreateVkCommandBuffers(g_VkDevice, g_VkGraphicsQueueIdx, &g_GraphicsCommandPool, g_GraphicsCommandBuffers, vkConfig_BufferCount);
 	CreateVkFences(g_VkDevice, g_GraphicsFences, vkConfig_BufferCount);
 
-	VkSurfaceFormatKHR surfaceFormat = SelectVkSurfaceFormat(selectedDevice);
-	g_VkSurfaceExtents = CreateSurfaceExtents(selectedDevice, surfaceWidth, surfaceHeight);
-	g_VkSwapchain = CreateVkSwapchain(selectedDevice, g_VkDevice, g_VkSurface, surfaceFormat, g_VkSurfaceExtents, g_VkGraphicsQueueIdx, g_VkPresentQueueIdx, vkConfig_BufferCount);
-	g_VkRenderPass = CreateVkRenderPass(g_VkDevice, surfaceFormat);
-
-	CreateVkFramebuffers(g_VkDevice, g_VkSwapchain, surfaceFormat, g_VkRenderPass, g_VkSurfaceExtents, g_VkFramebuffers, g_VkSwapchainImages, vkConfig_BufferCount);
 	CreateVkShaders(g_VkDevice);
 
-
 	g_VkDescriptorSetLayout = CreateVkDescriptorSetLayout(g_VkDevice);
+	CreateVkDescriptorPools(g_VkDevice, g_VkDescriptorPools, vkConfig_BufferCount);
 	g_VkPipelineLayout = CreateVkPipelineLayout(g_VkDevice, g_VkDescriptorSetLayout);
 	g_VkPipelineCache = CreateVkPipelineCache(g_VkDevice);
-	g_VkPipeline = CreateVkPipeline(g_VkDevice, g_VkRenderPass, g_VkShaders[VkShader_DefaultVert], g_VkShaders[VkShader_DefaultFrag], g_VkPipelineCache, g_VkPipelineLayout, surfaceWidth, surfaceHeight);
 
-	CreateVkDescriptorPools(g_VkDevice, g_VkDescriptorPools, vkConfig_BufferCount);
-
-	InitVkAllocator(selectedDevice, g_VkDevice);
+	InitVkAllocators(g_VkSelectedDevice, g_VkDevice);
 	CreateVkMeshes(g_VkDevice, &g_VkAllocator);
 
-	RecordCommandBuffers(surfaceWidth, surfaceHeight);
+	VkSurfaceFormatKHR surfaceFormat = SelectVkSurfaceFormat(g_VkSelectedDevice);
+	g_VkSurfaceExtents = CreateSurfaceExtents(g_VkSelectedDevice, surfaceWidth, surfaceHeight);
+	g_VkSwapchain = CreateVkSwapchain(g_VkSelectedDevice, g_VkDevice, g_VkSurface, surfaceFormat, g_VkSurfaceExtents, g_VkGraphicsQueueIdx, g_VkPresentQueueIdx, vkConfig_BufferCount);
+	g_VkRenderPass = CreateVkRenderPass(g_VkDevice, surfaceFormat);
+
+	g_VkFontImage = InitFont(g_VkDevice, &g_VkImageAllocator, &g_VkAllocator, g_GraphicsCommandPool, g_VkGraphicsQueue);
+
+	CreateVkFramebuffers(g_VkDevice, g_VkSwapchain, surfaceFormat, g_VkRenderPass, g_VkSurfaceExtents, g_VkFramebuffers, g_VkSwapchainImages, vkConfig_BufferCount);
+	g_VkPipeline = CreateVkPipeline(g_VkDevice, g_VkRenderPass, g_VkShaders[VkShader_DefaultVert], g_VkShaders[VkShader_DefaultFrag], g_VkPipelineCache, g_VkPipelineLayout, surfaceWidth, surfaceHeight);
+	CreateVkDescriptorSet(g_VkDevice, &g_VkAllocator, surfaceWidth, surfaceHeight, &g_VkFontImage, g_VkDescriptorSetLayout, g_VkDescriptorBuffers, g_VkDescriptorPools, g_VkDescriptorSets, vkConfig_BufferCount);
+	RecordCommandBuffers();
 }
 
-void VkRenderer_Kill()
+void VkRenderer_Kill(void)
 {
+	vkDeviceWaitIdle(g_VkDevice);
+	DestroyVkDescriptorSets(g_VkDevice, &g_VkAllocator, g_VkDescriptorBuffers, vkConfig_BufferCount);
+
+	DestroyVkImage(g_VkDevice, &g_VkFontImage);
 	DestroyVkMeshes(g_VkDevice, &g_VkAllocator);
-	KillVkAllocator(g_VkDevice);
+	KillVkAllocators(g_VkDevice);
 
 	DestroyVkDescriptorPools(g_VkDevice, g_VkDescriptorPools, vkConfig_BufferCount);
 	DestroyVkPipeline(g_VkDevice, g_VkPipeline);
@@ -1521,13 +2040,20 @@ void VkRenderer_Kill()
 	DestroyVkInstance(g_VkInstance);
 }
 
-void VkRenderer_Draw()
+void VkRenderer_Draw(
+	uint32_t surfaceWidth, 
+	uint32_t surfaceHeight)
 {
 	static uint8_t s_CurrentFrame = 0;
 
 	// Start the frame
 	uint32_t imageIndex = 0;
-	VK_CHECK(vkAcquireNextImageKHR(g_VkDevice, g_VkSwapchain, UINT64_MAX, g_AcquireSemaphores[s_CurrentFrame], VK_NULL_HANDLE, &imageIndex));
+	VkResult result = vkAcquireNextImageKHR(g_VkDevice, g_VkSwapchain, UINT64_MAX, g_AcquireSemaphores[s_CurrentFrame], VK_NULL_HANDLE, &imageIndex);
+	if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR)
+	{
+		RecreateVkSwapchain(surfaceWidth, surfaceHeight);
+		return;
+	}
 
 	VkSemaphore* acquire = &g_AcquireSemaphores[s_CurrentFrame];
 	VkSemaphore* finished = &g_FrameCompleteSemaphores[s_CurrentFrame];
@@ -1545,11 +2071,12 @@ void VkRenderer_Draw()
 		.pWaitDstStageMask = &dstStageMask
 	};
 
+	// Present the frame
+	VK_CHECK(vkResetFences(g_VkDevice, 1, &g_GraphicsFences[s_CurrentFrame]));
+
 	VK_CHECK(vkQueueSubmit(g_VkGraphicsQueue, 1, &submitInfo, g_GraphicsFences[s_CurrentFrame]));
 
-	// Present the frame
 	VK_CHECK(vkWaitForFences(g_VkDevice, 1, &g_GraphicsFences[s_CurrentFrame], VK_TRUE, UINT64_MAX));
-	VK_CHECK(vkResetFences(g_VkDevice, 1, &g_GraphicsFences[s_CurrentFrame]));
 
 	VkPresentInfoKHR presentInfo =
 	{
@@ -1560,12 +2087,16 @@ void VkRenderer_Draw()
 		.pSwapchains = &g_VkSwapchain,
 		.pImageIndices = &imageIndex
 	};
-	VK_CHECK(vkQueuePresentKHR(g_VkPresentQueue, &presentInfo));
+	VkResult presentResult = vkQueuePresentKHR(g_VkPresentQueue, &presentInfo);
+	if (presentResult == VK_ERROR_OUT_OF_DATE_KHR || presentResult == VK_SUBOPTIMAL_KHR)
+	{
+		RecreateVkSwapchain(surfaceWidth, surfaceHeight);
+	}
 
 	s_CurrentFrame = (s_CurrentFrame + 1) % vkConfig_BufferCount;
 }
 
-void VkRenderer_ClearInstances()
+void VkRenderer_ClearInstances(void)
 {
 	for (uint32_t i = 0; i < VkMesh_Count; i++)
 	{
@@ -1574,13 +2105,22 @@ void VkRenderer_ClearInstances()
 	}
 }
 
-void VkRenderer_AddInstance(mist_VkMesh mesh, mist_Vec2 position, mist_Vec2 scale)
+void VkRenderer_AddInstance(
+	mist_VkMesh mesh, 
+	mist_Vec2 position, 
+	mist_Vec2 scale, 
+	mist_Color color,
+	const char* string)
 {
 	VkDrawIndirectCommand* indirectCommand = (VkDrawIndirectCommand*)g_VkIndirectDrawBuffer.mappedMem + mesh;
 
 	mist_VkInstance* instance = (mist_VkInstance*)g_VkInstances[mesh].mappedMem + indirectCommand->instanceCount;
 	instance->position = position;
 	instance->scale = scale;
+	instance->color = color;
+	instance->stringSize = strlen(string);
+	assert(instance->stringSize <= 16);
+	Font_StringToIndices(string, (uint8_t*)instance->stringBuffer);
 
 	assert(indirectCommand->instanceCount + 1 < vkConfig_MaxInstanceCount);
 	indirectCommand->instanceCount++;
