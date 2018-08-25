@@ -52,7 +52,7 @@ void main()
 		vec2 charUV = vec2(uvStart.x + tileUV.x * normalizedX, uvStart.y + tileUV.y * var_UV.y);
 		
 		vec4 fontColor = texture(uniform_FontImage, charUV);
-		out_Color = var_Color * step(0.1, length(fontColor.rgb));
+		out_Color = var_Color * fontColor.r * 1.5;
 	}
 	else
 	{
