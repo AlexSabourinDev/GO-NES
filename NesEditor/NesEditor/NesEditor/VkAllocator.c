@@ -16,7 +16,7 @@ VkDeviceSize mist_ClosestPowerOfTwo(VkDeviceSize size)
 	return closest;
 }
 
-void mist_InitVkAllocator(mist_VkAllocator* allocator, VkDevice device, VkDeviceSize size, uint32_t memoryTypeIndex, mist_AllocatorFlags flags)
+void mist_InitVkAllocatorPool(mist_VkAllocatorPool* allocator, VkDevice device, VkDeviceSize size, uint32_t memoryTypeIndex, mist_AllocatorFlags flags)
 {
 	allocator->size = mist_ClosestPowerOfTwo(size);
 	allocator->flags = flags;
@@ -36,9 +36,10 @@ void mist_InitVkAllocator(mist_VkAllocator* allocator, VkDevice device, VkDevice
 
 	allocator->head = block;
 	allocator->nextId = 1;
+	allocator->memoryType = memoryTypeIndex;
 }
 
-void mist_CleanupVkAllocator(mist_VkAllocator* allocator, VkDevice device)
+void mist_CleanupVkAllocatorPool(mist_VkAllocatorPool* allocator, VkDevice device)
 {
 	mist_VkMemBlock* iter = allocator->head;
 	while (NULL != iter)
@@ -51,7 +52,7 @@ void mist_CleanupVkAllocator(mist_VkAllocator* allocator, VkDevice device)
 	vkFreeMemory(device, allocator->memory, NO_ALLOCATOR);
 }
 
-mist_VkAlloc mist_VkAllocate(mist_VkAllocator* allocator, VkDeviceSize size, VkDeviceSize alignment)
+mist_VkAlloc mist_VkAllocateFromPool(mist_VkAllocatorPool* allocator, VkDeviceSize size, VkDeviceSize alignment)
 {
 	VkDeviceSize sizeMod = size % alignment;
 	VkDeviceSize realSize = sizeMod == 0 ? size : size + alignment - sizeMod;
@@ -63,7 +64,7 @@ mist_VkAlloc mist_VkAllocate(mist_VkAllocator* allocator, VkDeviceSize size, VkD
 		if (!iter->allocated && iter->size == blockSize)
 		{
 			iter->allocated = true;
-			return (mist_VkAlloc) { .memory = allocator->memory, .offset = iter->offset, .id = iter->id };
+			return (mist_VkAlloc) { .memory = allocator->memory, .offset = iter->offset, .id = iter->id, .pool = allocator };
 		}
 	}
 
@@ -72,7 +73,7 @@ mist_VkAlloc mist_VkAllocate(mist_VkAllocator* allocator, VkDeviceSize size, VkD
 	for (mist_VkMemBlock* iter = allocator->head; NULL != iter; iter = iter->next)
 	{
 		if (   NULL == smallestBlock
-			|| (iter->size < smallestBlock->size && !iter->allocated))
+			|| (iter->size > blockSize && iter->size < smallestBlock->size && !iter->allocated))
 		{
 			smallestBlock = iter;
 		}
@@ -111,7 +112,7 @@ mist_VkAlloc mist_VkAllocate(mist_VkAllocator* allocator, VkDeviceSize size, VkD
 		}
 
 		iter->allocated = true;
-		return (mist_VkAlloc) { .memory = allocator->memory, .offset = iter->offset, .id = iter->id };
+		return (mist_VkAlloc) { .memory = allocator->memory, .offset = iter->offset, .id = iter->id, .pool = allocator };
 	}
 
 	printf("Error: Failed to allocate memory! Allocate more memory!");
@@ -120,7 +121,7 @@ mist_VkAlloc mist_VkAllocate(mist_VkAllocator* allocator, VkDeviceSize size, VkD
 	return (mist_VkAlloc) { 0 };
 }
 
-void mist_VkFree(mist_VkAllocator* allocator, mist_VkAlloc allocation)
+void mist_VkFreeFromPool(mist_VkAllocatorPool* allocator, mist_VkAlloc allocation)
 {
 	VALIDATE_MEMORY(allocator, allocation);
 
@@ -169,11 +170,60 @@ void mist_VkFree(mist_VkAllocator* allocator, mist_VkAlloc allocation)
 	}
 }
 
-void* mist_VkMapMemory(mist_VkAllocator* allocator, mist_VkAlloc allocation)
+void mist_InitVkAllocator(mist_VkAllocator* allocator, VkDevice device)
 {
-	VALIDATE_MEMORY(allocator, allocation);
-	assert((allocator->flags & mist_AllocatorHostVisible) != 0);
+	allocator->device = device;
+}
 
-	return (uint8_t*)allocator->mappedMem + allocation.offset;
+void mist_CleanupVkAllocator(mist_VkAllocator* allocator)
+{
+	for (unsigned int i = 0; i < vkConfig_MaxVkAllocatorPool; i++)
+	{
+		mist_CleanupVkAllocatorPool(&allocator->pools[i], allocator->device);
+	}
+}
+
+mist_VkAlloc mist_VkAllocate(mist_VkAllocator* allocator, uint32_t memoryTypeIndex, VkDeviceSize size, VkDeviceSize alignment, mist_AllocatorFlags flags)
+{
+#define vkConfig_AllocatorPoolSize 1024 * 1024 * 100
+
+	mist_VkAllocatorPool* foundPool = NULL;
+	for (unsigned int i = 0; i < vkConfig_MaxVkAllocatorPool; i++)
+	{
+		if (allocator->pools[i].memoryType == memoryTypeIndex)
+		{
+			foundPool = &allocator->pools[i];
+			break;
+		}
+	}
+
+	if (foundPool == NULL)
+	{
+		for (unsigned int i = 0; i < vkConfig_MaxVkAllocatorPool; i++)
+		{
+			if (allocator->pools[i].head == NULL)
+			{
+				mist_InitVkAllocatorPool(&allocator->pools[i], allocator->device, vkConfig_AllocatorPoolSize, memoryTypeIndex, flags);
+				foundPool = &allocator->pools[i];
+				break;
+			}
+		}
+	}
+
+	assert(foundPool != NULL);
+	return mist_VkAllocateFromPool(foundPool, size, alignment);
+}
+
+void mist_VkFree(mist_VkAlloc allocation)
+{
+	mist_VkFreeFromPool(allocation.pool, allocation);
+}
+
+void* mist_VkMapMemory(mist_VkAlloc allocation)
+{
+	VALIDATE_MEMORY(allocation.pool, allocation);
+	assert((allocation.pool->flags & mist_AllocatorHostVisible) != 0);
+
+	return (uint8_t*)allocation.pool->mappedMem + allocation.offset;
 }
 

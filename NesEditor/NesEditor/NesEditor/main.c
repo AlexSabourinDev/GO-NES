@@ -84,8 +84,8 @@ void GUI(void)
 		Toolbar_Export
 	};
 	
-	#define GUIConfig_ToolbarWidth 100.0f
-	#define GUIConfig_ToolbarHeight 40.0f
+	#define GUIConfig_ToolbarWidth 80.0f
+	#define GUIConfig_ToolbarHeight 24.0f
 	
 	int8_t selectedTab = GUI_Toolbar((mist_Vec2) { GUIConfig_ToolbarWidth * 0.5f, g_ScreenDimensions.y - GUIConfig_ToolbarHeight * 0.5f },
 							(mist_Vec2) { GUIConfig_ToolbarWidth, GUIConfig_ToolbarHeight }, toolBars, ARRAYSIZE(toolBars));
@@ -98,6 +98,14 @@ void GUI(void)
 		}
 	}
 	else if (selectedTab == Toolbar_Save)
+	{
+		char path[256] = { 0 };
+		if (SaveDialog(path))
+		{
+			// TODO:
+		}
+	}
+	else if (selectedTab == Toolbar_Export)
 	{
 		char path[256] = { 0 };
 		if (SaveDialog(path))

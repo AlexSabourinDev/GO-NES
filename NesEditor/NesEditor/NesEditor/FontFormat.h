@@ -5,14 +5,14 @@
 
 #include <Windows.h>
 
-static char mist_FontFormat[] = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
+static char mist_FontFormat[] = "0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 static uint8_t mist_FontIndices[255] = { 0 };
 
-static uint8_t mist_FontTileWidth = 36;
-static uint8_t mist_FontTileHeight = 64;
+static uint8_t mist_FontTileWidth = 10;
+static uint8_t mist_FontTileHeight = 18;
 
-static uint16_t mist_FontWidth = 512;
-static uint16_t mist_FontHeight = 512;
+static uint16_t mist_FontWidth = 256;
+static uint16_t mist_FontHeight = 256;
 
 static void Font_InitIndices()
 {

@@ -20,6 +20,11 @@ layout (binding = 0) uniform UBO
 
 layout (binding = 1) uniform sampler2D uniform_FontImage;
 
+float median(float r, float g, float b) 
+{
+    return max(min(r, g), min(max(r, g), b));
+}
+
 void main()
 {
 	if(var_StringSize > 0)
@@ -45,10 +50,9 @@ void main()
 		float normalizedX = mod(var_UV.x / normalizedXSize, 1.0);
 		
 		vec2 charUV = vec2(uvStart.x + tileUV.x * normalizedX, uvStart.y + tileUV.y * var_UV.y);
-		vec4 fontColor = ceil(texture(uniform_FontImage, charUV));
-		fontColor.a = (fontColor.r + fontColor.g + fontColor.b);
 		
-		out_Color = fontColor * var_Color;
+		vec4 fontColor = texture(uniform_FontImage, charUV);
+		out_Color = var_Color * step(0.1, length(fontColor.rgb));
 	}
 	else
 	{

@@ -14,6 +14,8 @@
 
 // stb
 #define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_LINEAR
+#define STBI_NO_HDR
 #include "stb_image.h"
 
 // Config!
@@ -108,7 +110,6 @@ VkDescriptorPool g_VkDescriptorPools[vkConfig_BufferCount];
 VkDescriptorSet g_VkDescriptorSets[vkConfig_BufferCount];
 
 mist_VkAllocator g_VkAllocator;
-mist_VkAllocator g_VkImageAllocator;
 mist_PhysicalDevice* g_VkSelectedDevice;
 
 typedef struct mist_VkVertex
@@ -904,7 +905,7 @@ VkRenderPass CreateVkRenderPass(
 	{
 		.samples = VK_SAMPLE_COUNT_1_BIT,
 		.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
-		.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+		.storeOp = VK_ATTACHMENT_STORE_OP_STORE,
 		.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
 		.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
 		.format = surfaceFormat.format
@@ -1479,28 +1480,23 @@ uint32_t FindMemoryIndex(
 }
 
 void InitVkAllocators(
-	mist_PhysicalDevice* physicalDevice,
 	VkDevice device)
 {
 	mist_Print("Initializing allocator...");
-	mist_InitVkAllocator(&g_VkAllocator, device, 1024 * 1024 * 10, 
-		FindMemoryIndex(physicalDevice, UINT32_MAX, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), mist_AllocatorHostVisible);
-	mist_InitVkAllocator(&g_VkImageAllocator, device, 1024 * 1024 * 10,
-		FindMemoryIndex(physicalDevice, 258, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0), mist_AllocatorNone);
+	mist_InitVkAllocator(&g_VkAllocator, device);
 	mist_Print("Initialized allocator!");
 }
 
-void KillVkAllocators(
-	VkDevice device)
+void KillVkAllocators(void)
 {
 	mist_Print("Cleaning up allocator!");
-	mist_CleanupVkAllocator(&g_VkAllocator, device);
-	mist_CleanupVkAllocator(&g_VkImageAllocator, device);
+	mist_CleanupVkAllocator(&g_VkAllocator);
 	mist_Print("Cleaned up allocator!");
 }
 
 mist_VkBuffer CreateVkBuffer(
 	VkDevice device,
+	mist_PhysicalDevice* physicalDevice,
 	mist_VkAllocator* allocator,
 	void* data, VkDeviceSize size,
 	VkBufferUsageFlags usage)
@@ -1518,10 +1514,12 @@ mist_VkBuffer CreateVkBuffer(
 	VkMemoryRequirements memoryRequirements;
 	vkGetBufferMemoryRequirements(device, buffer, &memoryRequirements);
 
-	mist_VkAlloc allocation = mist_VkAllocate(allocator, memoryRequirements.size, memoryRequirements.alignment);
+	mist_VkAlloc allocation = mist_VkAllocate(allocator, 
+		FindMemoryIndex(physicalDevice, memoryRequirements.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), 
+		memoryRequirements.size, memoryRequirements.alignment, mist_AllocatorHostVisible);
 	VK_CHECK(vkBindBufferMemory(device, buffer, allocation.memory, allocation.offset));
 
-	void* mappedMemory = mist_VkMapMemory(allocator, allocation);
+	void* mappedMemory = mist_VkMapMemory(allocation);
 
 	if (data != NULL)
 	{
@@ -1532,11 +1530,10 @@ mist_VkBuffer CreateVkBuffer(
 
 void DestroyVkBuffer(
 	VkDevice device,
-	mist_VkAllocator* allocator,
 	mist_VkBuffer buffer)
 {
 	vkDestroyBuffer(device, buffer.buffer, NO_ALLOCATOR);
-	mist_VkFree(allocator, buffer.alloc);
+	mist_VkFree(buffer.alloc);
 }
 
 void CreateVkDescriptorPools(
@@ -1583,6 +1580,7 @@ void DestroyVkDescriptorPools(
 
 void CreateVkDescriptorSet(
 	VkDevice device,
+	mist_PhysicalDevice* physicalDevice,
 	mist_VkAllocator* allocator,
 	uint32_t surfaceWidth,
 	uint32_t surfaceHeight,
@@ -1604,7 +1602,7 @@ void CreateVkDescriptorSet(
 
 	for (uint32_t i = 0; i < descriptorSetCount; i++)
 	{
-		descriptorBuffers[i] = CreateVkBuffer(device, allocator, &uniformBuffer, sizeof(mist_VkUniformBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+		descriptorBuffers[i] = CreateVkBuffer(device, physicalDevice, allocator, &uniformBuffer, sizeof(mist_VkUniformBuffer), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
 
 		VkDescriptorSetAllocateInfo descriptorSetAlloc =
 		{
@@ -1661,14 +1659,13 @@ void CreateVkDescriptorSet(
 }
 
 void DestroyVkDescriptorSets(
-	VkDevice device, 
-	mist_VkAllocator* allocator, 
+	VkDevice device,
 	mist_VkBuffer* buffers, 
 	uint32_t bufferCount)
 {
 	for (uint32_t i = 0; i < bufferCount; i++)
 	{
-		DestroyVkBuffer(device, allocator, buffers[i]);
+		DestroyVkBuffer(device, buffers[i]);
 	}
 }
 
@@ -1825,6 +1822,7 @@ void RecreateVkSwapchain(
 
 void CreateVkMeshes(
 	VkDevice device, 
+	mist_PhysicalDevice* physicalDevice,
 	mist_VkAllocator* allocator)
 {
 	// Rect
@@ -1841,24 +1839,23 @@ void CreateVkMeshes(
 		[VkMesh_Rect] = { .vertexCount = 4 }
 	};
 
-	g_VkIndirectDrawBuffer = CreateVkBuffer(device, allocator, indirectDraws, sizeof(VkDrawIndirectCommand) * VkMesh_Count, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
-	g_VkMeshes[VkMesh_Rect] = CreateVkBuffer(device, allocator, vertices, sizeof(mist_VkVertex) * ARRAYSIZE(vertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
-	g_VkInstances[VkMesh_Rect] = CreateVkBuffer(device, allocator, NULL, sizeof(mist_VkInstance) * vkConfig_MaxInstanceCount, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+	g_VkIndirectDrawBuffer = CreateVkBuffer(device, physicalDevice, allocator, indirectDraws, sizeof(VkDrawIndirectCommand) * VkMesh_Count, VK_BUFFER_USAGE_INDIRECT_BUFFER_BIT);
+	g_VkMeshes[VkMesh_Rect] = CreateVkBuffer(device, physicalDevice, allocator, vertices, sizeof(mist_VkVertex) * ARRAYSIZE(vertices), VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+	g_VkInstances[VkMesh_Rect] = CreateVkBuffer(device, physicalDevice, allocator, NULL, sizeof(mist_VkInstance) * vkConfig_MaxInstanceCount, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 }
 
 void DestroyVkMeshes(
-	VkDevice device, 
-	mist_VkAllocator* allocator)
+	VkDevice device)
 {
-	DestroyVkBuffer(device, allocator, g_VkMeshes[VkMesh_Rect]);
-	DestroyVkBuffer(device, allocator, g_VkInstances[VkMesh_Rect]);
-	DestroyVkBuffer(device, allocator, g_VkIndirectDrawBuffer);
+	DestroyVkBuffer(device, g_VkMeshes[VkMesh_Rect]);
+	DestroyVkBuffer(device, g_VkInstances[VkMesh_Rect]);
+	DestroyVkBuffer(device, g_VkIndirectDrawBuffer);
 }
 
 mist_VkImage CreateVkImage(
 	VkDevice device,
-	mist_VkAllocator* imageAllocator,
-	mist_VkAllocator* bufferAllocator,
+	mist_PhysicalDevice* physicalDevice,
+	mist_VkAllocator* allocator,
 	void* memory,
 	uint32_t x,
 	uint32_t y,
@@ -1890,16 +1887,18 @@ mist_VkImage CreateVkImage(
 	VkMemoryRequirements memReq;
 	vkGetImageMemoryRequirements(device, createdImage, &memReq);
 
-	mist_VkAlloc imageAlloc = mist_VkAllocate(imageAllocator, memReq.size, memReq.alignment);
+	mist_VkAlloc imageAlloc = mist_VkAllocate(allocator,
+		FindMemoryIndex(physicalDevice, memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, 0),
+		memReq.size, memReq.alignment, mist_AllocatorNone);
 	VK_CHECK(vkBindImageMemory(device, createdImage, imageAlloc.memory, imageAlloc.offset));
 
-	mist_VkBuffer imageBuffer = CreateVkBuffer(device, bufferAllocator, memory, x*y*n, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+	mist_VkBuffer imageBuffer = CreateVkBuffer(device, physicalDevice, allocator, memory, x*y*n, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
 	VkCommandBuffer imageCopyCommandBuffer = BeginOneTimeVkCommandBuffer(device, commandPool);
 	TransitionVkImageLayout(createdImage, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, imageCopyCommandBuffer);
 	CopyBufferToImage(imageBuffer.buffer, createdImage, x, y, imageCopyCommandBuffer);
 	TransitionVkImageLayout(createdImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, imageCopyCommandBuffer);
 	EndOneTimeVkCommandBuffer(device, imageCopyCommandBuffer, imageQueue, commandPool);
-	DestroyVkBuffer(device, bufferAllocator, imageBuffer);
+	DestroyVkBuffer(device, imageBuffer);
 
 	VkImageViewCreateInfo  imageCreateViewInfo =
 	{
@@ -1955,7 +1954,7 @@ void DestroyVkImage(VkDevice device, mist_VkImage* image)
 
 mist_VkImage InitFont(
 	VkDevice device, 
-	mist_VkAllocator* imageAllocator,
+	mist_PhysicalDevice* physicalDevice,
 	mist_VkAllocator* bufferAllocator,
 	VkCommandPool commandPool,
 	VkQueue commandQueue)
@@ -1965,7 +1964,7 @@ mist_VkImage InitFont(
 	int x, y, n;
 	stbi_uc* imageData = stbi_load("../../Assets/Images/CourierNew.bmp", &x, &y, &n, STBI_rgb_alpha);
 
-	mist_VkImage image = CreateVkImage(device, imageAllocator, bufferAllocator, imageData, x, y, STBI_rgb_alpha, commandPool, commandQueue);
+	mist_VkImage image = CreateVkImage(device, physicalDevice, bufferAllocator, imageData, x, y, STBI_rgb_alpha, commandPool, commandQueue);
 
 	stbi_image_free(imageData);
 	return image;
@@ -1997,30 +1996,30 @@ void VkRenderer_Init(
 	g_VkPipelineLayout = CreateVkPipelineLayout(g_VkDevice, g_VkDescriptorSetLayout);
 	g_VkPipelineCache = CreateVkPipelineCache(g_VkDevice);
 
-	InitVkAllocators(g_VkSelectedDevice, g_VkDevice);
-	CreateVkMeshes(g_VkDevice, &g_VkAllocator);
+	InitVkAllocators(g_VkDevice);
+	CreateVkMeshes(g_VkDevice, g_VkSelectedDevice, &g_VkAllocator);
 
 	VkSurfaceFormatKHR surfaceFormat = SelectVkSurfaceFormat(g_VkSelectedDevice);
 	g_VkSurfaceExtents = CreateSurfaceExtents(g_VkSelectedDevice, surfaceWidth, surfaceHeight);
 	g_VkSwapchain = CreateVkSwapchain(g_VkSelectedDevice, g_VkDevice, g_VkSurface, surfaceFormat, g_VkSurfaceExtents, g_VkGraphicsQueueIdx, g_VkPresentQueueIdx, vkConfig_BufferCount);
 	g_VkRenderPass = CreateVkRenderPass(g_VkDevice, surfaceFormat);
 
-	g_VkFontImage = InitFont(g_VkDevice, &g_VkImageAllocator, &g_VkAllocator, g_GraphicsCommandPool, g_VkGraphicsQueue);
+	g_VkFontImage = InitFont(g_VkDevice, g_VkSelectedDevice, &g_VkAllocator, g_GraphicsCommandPool, g_VkGraphicsQueue);
 
 	CreateVkFramebuffers(g_VkDevice, g_VkSwapchain, surfaceFormat, g_VkRenderPass, g_VkSurfaceExtents, g_VkFramebuffers, g_VkSwapchainImages, vkConfig_BufferCount);
 	g_VkPipeline = CreateVkPipeline(g_VkDevice, g_VkRenderPass, g_VkShaders[VkShader_DefaultVert], g_VkShaders[VkShader_DefaultFrag], g_VkPipelineCache, g_VkPipelineLayout, surfaceWidth, surfaceHeight);
-	CreateVkDescriptorSet(g_VkDevice, &g_VkAllocator, surfaceWidth, surfaceHeight, &g_VkFontImage, g_VkDescriptorSetLayout, g_VkDescriptorBuffers, g_VkDescriptorPools, g_VkDescriptorSets, vkConfig_BufferCount);
+	CreateVkDescriptorSet(g_VkDevice, g_VkSelectedDevice, &g_VkAllocator, surfaceWidth, surfaceHeight, &g_VkFontImage, g_VkDescriptorSetLayout, g_VkDescriptorBuffers, g_VkDescriptorPools, g_VkDescriptorSets, vkConfig_BufferCount);
 	RecordCommandBuffers();
 }
 
 void VkRenderer_Kill(void)
 {
 	vkDeviceWaitIdle(g_VkDevice);
-	DestroyVkDescriptorSets(g_VkDevice, &g_VkAllocator, g_VkDescriptorBuffers, vkConfig_BufferCount);
+	DestroyVkDescriptorSets(g_VkDevice, g_VkDescriptorBuffers, vkConfig_BufferCount);
 
 	DestroyVkImage(g_VkDevice, &g_VkFontImage);
-	DestroyVkMeshes(g_VkDevice, &g_VkAllocator);
-	KillVkAllocators(g_VkDevice);
+	DestroyVkMeshes(g_VkDevice);
+	KillVkAllocators();
 
 	DestroyVkDescriptorPools(g_VkDevice, g_VkDescriptorPools, vkConfig_BufferCount);
 	DestroyVkPipeline(g_VkDevice, g_VkPipeline);

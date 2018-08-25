@@ -5,7 +5,8 @@
 #include <math.h>
 
 #define GUIConfig_Unselected (mist_Color){ .r = 0.2f, .g = 0.2f, .b = 0.2f, .a = 1.0f }
-#define GUIConfig_Selected (mist_Color){ .r = 0.5f, .g = 0.5f, .b = 0.5f, .a = 1.0f }
+#define GUIConfig_Hover (mist_Color){ .r = 0.3f, .g = 0.3f, .b = 0.3f, .a = 1.0f }
+#define GUIConfig_Selected (mist_Color){ .r = 0.1f, .g = 0.1f, .b = 0.1f, .a = 1.0f }
 #define GUIConfig_White (mist_Color){ .r = 0.9f, .g = 0.9f, .b = 0.9f, .a = 1.0f }
 
 mist_Vec2 g_MousePosition;
@@ -13,17 +14,23 @@ mist_MouseState g_MouseState;
 
 bool GUI_Button(mist_Vec2 position, mist_Vec2 size, const char* string)
 {
-	mist_Vec2 labelSize = (mist_Vec2) { .x = (float)strlen(string) * 15.0f, .y = 20.0f };
-	mist_Vec2 labelPos = (mist_Vec2) { .x = position.x - size.x * 0.5f + labelSize.x * 0.5f + 5.0f, .y = position.y - 5.0f };
+	mist_Vec2 labelSize = (mist_Vec2) { .x = (float)strlen(string) * 10.0f, .y = 18.0f };
+	mist_Vec2 labelPos = (mist_Vec2) { .x = roundf(position.x), .y = roundf(position.y) };
 
-	if (g_MouseState != MouseState_None)
+	if (   fabsf(g_MousePosition.x - position.x) < size.x * 0.5f
+		&& fabsf(g_MousePosition.y - position.y) < size.y * 0.5f)
 	{
-		if (   fabsf(g_MousePosition.x - position.x) < size.x * 0.5f
-			&& fabsf(g_MousePosition.y - position.y) < size.y * 0.5f)
+		if (g_MouseState != MouseState_None)
 		{
 			VkRenderer_AddInstance(VkMesh_Rect, position, size, GUIConfig_Selected, "");
 			GUI_Label(labelPos, labelSize, string);
 			return g_MouseState == MouseState_Up;
+		}
+		else
+		{
+			VkRenderer_AddInstance(VkMesh_Rect, position, size, GUIConfig_Hover, "");
+			GUI_Label(labelPos, labelSize, string);
+			return false;
 		}
 	}
 

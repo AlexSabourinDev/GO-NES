@@ -6,14 +6,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-typedef struct mist_VkAlloc
-{
-	VkDeviceMemory memory;
-	VkDeviceSize   offset;
-	int            id;
-
-} mist_VkAlloc;
-
 typedef struct mist_VkMemBlock
 {
 	VkDeviceSize size;
@@ -32,7 +24,7 @@ typedef enum mist_AllocatorFlags
 
 } mist_AllocatorFlags;
 
-typedef struct mist_VkAllocator
+typedef struct mist_VkAllocatorPool
 {
 	mist_VkMemBlock* head;
 
@@ -40,18 +32,35 @@ typedef struct mist_VkAllocator
 	VkDeviceSize     size;
 	int              nextId;
 
+	uint32_t         memoryType;
 	mist_AllocatorFlags flags;
 
 	void*            mappedMem;
 
+} mist_VkAllocatorPool;
+
+#define vkConfig_MaxVkAllocatorPool 10
+typedef struct mist_VkAllocator
+{
+	VkDevice device;
+	mist_VkAllocatorPool pools[vkConfig_MaxVkAllocatorPool];
 } mist_VkAllocator;
 
-void mist_InitVkAllocator(mist_VkAllocator* allocator, VkDevice device, VkDeviceSize size, uint32_t memoryTypeIndex, mist_AllocatorFlags flags);
-void mist_CleanupVkAllocator(mist_VkAllocator* allocator, VkDevice device);
+typedef struct mist_VkAlloc
+{
+	VkDeviceMemory memory;
+	VkDeviceSize   offset;
+	int            id;
 
-mist_VkAlloc mist_VkAllocate(mist_VkAllocator* allocator, VkDeviceSize size, VkDeviceSize alignment);
-void mist_VkFree(mist_VkAllocator* allocator, mist_VkAlloc allocation);
+	mist_VkAllocatorPool* pool;
+} mist_VkAlloc;
 
-void* mist_VkMapMemory(mist_VkAllocator* allocator, mist_VkAlloc allocation);
+void mist_InitVkAllocator(mist_VkAllocator* allocator, VkDevice device);
+void mist_CleanupVkAllocator(mist_VkAllocator* allocator);
+
+mist_VkAlloc mist_VkAllocate(mist_VkAllocator* allocator, uint32_t memoryTypeIndex, VkDeviceSize size, VkDeviceSize alignment, mist_AllocatorFlags flags);
+void mist_VkFree(mist_VkAlloc allocation);
+
+void* mist_VkMapMemory(mist_VkAlloc allocation);
 
 #endif //__ALLOCATOR_H
