@@ -199,7 +199,7 @@ OnGameInit:
 		BNE LOAD_SPRITES_LOOP
 		
 	
-	LDA #%10010000   ; enable NMI, sprites from Pattern Table 0
+	LDA #%10001000   ; enable NMI, sprites from Pattern Table 0
 	STA PPU_CONTROL_REG_1
 
 	LDA #%00011110 ; enable sprites, enable background
@@ -243,16 +243,16 @@ OnGameFrame:
 ;;;;;;;
 	.bank 1
 	.org $E000
-PALETTE_DATA:
-	.db $22,$29,$1A,$0F,  $22,$36,$17,$0F,  $22,$30,$21,$0F,  $22,$27,$17,$0F   ;;background palette
-	.db $22,$1C,$15,$14,  $22,$02,$38,$3C,  $22,$1C,$15,$14,  $22,$02,$38,$3C   ;;sprite palette
+	.include "Jezz.palette"   ;includes 8KB graphics
+	
+	
 	
 SPRITES:
     ;   vert tile attr horiz
-	.db $80, $32, $00, $80   ;sprite 0
-	.db $80, $33, $00, $88   ;sprite 1
-	.db $88, $34, $00, $80   ;sprite 2
-	.db $88, $35, $00, $88   ;sprite 3
+	.db $80, $00, $00, $80   ;sprite 0
+	.db $80, $01, $00, $88   ;sprite 1
+	.db $88, $10, $00, $80   ;sprite 2
+	.db $88, $11, $00, $88   ;sprite 3
 	
 POSITIONS_X:
 	.db $80, $30, $05, $20

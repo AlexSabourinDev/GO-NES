@@ -22,10 +22,10 @@ BUTTON_RIGHT  = %00000001
 	.bank 0
 	.org $C000
 
-	.include "../NesGame/Memory.nesasm"
-	.include "../NesGame/Macros.nesasm"
-	.include "../NesGame/PPU.nesasm"
-	.include "../NesGame/Game.nesasm"
+	.include "Memory.nesasm"
+	.include "Macros.nesasm"
+	.include "PPU.nesasm"
+	.include "Game.nesasm"
 	
 ReadInput:
 	LDA #$01
@@ -92,4 +92,4 @@ RESET:
 ; Data
 	.bank 2
 	.org $0000
-	.incbin "JezzLevel.chr.dat"   ;includes 8KB graphics
+	.incbin "Jezz.chr"   ;includes 8KB graphics

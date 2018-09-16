@@ -41,7 +41,7 @@ void main()
 	var_Color = in_InstanceColor;
 	var_StringSize = in_TextStringSize;
 	var_String = in_TextString;
-	var_UV = in_Position + 0.5;
+	var_UV = in_Position;
 	var_UV.y = 1.0 - var_UV.y;
 	
 }

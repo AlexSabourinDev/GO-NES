@@ -44,8 +44,8 @@ bool OpenDialog(char* path)
 	{
 		.lStructSize = sizeof(OPENFILENAME),
 		.lpstrFile = path,
-		.nMaxFile = ARRAYSIZE(path),
-		.lpstrFilter = "All\0*.*\0Image\0*.png\0",
+		.nMaxFile = 1024,
+		.lpstrFilter = "All\0*.*\0Image\0*.png\0Canvas\0*.ncvs\0",
 		.nFilterIndex = 1,
 		.nMaxFileTitle = 0,
 		.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST
@@ -59,8 +59,8 @@ bool SaveDialog(char* path)
 	{
 		.lStructSize = sizeof(OPENFILENAME),
 		.lpstrFile = path,
-		.nMaxFile = ARRAYSIZE(path),
-		.lpstrFilter = "All\0*.*\0Image\0*.png\0",
+		.nMaxFile = 1024,
+		.lpstrFilter = "All\0*.*\0Image\0*.png\0Canvas\0*.ncvs\0",
 		.nFilterIndex = 1,
 		.nMaxFileTitle = 0,
 		.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST
@@ -70,47 +70,164 @@ bool SaveDialog(char* path)
 
 void GUI(void)
 {
-	const char* toolBars[] =
+	static mist_NESPixel pixel =
+	{
+		.paletteIndex = 0,
+		.blockColor = 0
+	};
+
+	static mist_NESCanvas canvas =
+	{
+		.isForeground = true,
+
+		.pixelCanvas = { { 0 } },
+		.paletteBlockIndices = { { 0 } },
+
+		.palette = { {0, 1, 2, 3,  0, 4, 5, 6,  0, 7, 8, 9,  0, 10, 11, 12},{ 0, 1, 2, 3,  0, 4, 5, 6,  0, 7, 8, 9,  0, 10, 11, 12 } },
+		.width = 128,
+		.height = 128
+	};
+
+	mist_Vec2 canvasSize = { .x = 768.0f,.y = 768.0f };
+	GUI_NESColorPicker(&canvas, &pixel, (mist_Vec2) { .x = 0.0f, .y = g_ScreenDimensions.y * 0.5f - 256.0f }, (mist_Vec2) { .x = 100.0f, .y = 512.0f });
+	GUI_NESPalette(&canvas, &pixel, (mist_Vec2) { .x = g_ScreenDimensions.x - 100.0f, .y = g_ScreenDimensions.y * 0.5f - 256.0f }, (mist_Vec2) { .x = 100.0f, .y = 512.0f });
+	GUI_NESCanvas(&canvas, &pixel, (mist_Vec2) { .x = g_ScreenDimensions.x * 0.5f - canvasSize.x*0.5f, .y = g_ScreenDimensions.y * 0.5f - canvasSize.y * 0.5f }, canvasSize);
+
+
+	static const char* toolBars[] =
 	{
 		"Open",
 		"Save",
-		"Export"
+		"Export",
+		"Foreground"
 	};
 
 	enum mist_Toolbar
 	{
 		Toolbar_Open,
 		Toolbar_Save,
-		Toolbar_Export
+		Toolbar_Export,
+		Toolbar_IsBackground
 	};
 	
-	#define GUIConfig_ToolbarWidth 80.0f
-	#define GUIConfig_ToolbarHeight 24.0f
+	#define GUIConfig_ToolbarWidth 110.0f
+	#define GUIConfig_ToolbarHeight 25.0f
 	
-	int8_t selectedTab = GUI_Toolbar((mist_Vec2) { GUIConfig_ToolbarWidth * 0.5f, g_ScreenDimensions.y - GUIConfig_ToolbarHeight * 0.5f },
+	int8_t selectedTab = GUI_Toolbar((mist_Vec2) { 0.0f, g_ScreenDimensions.y - GUIConfig_ToolbarHeight },
 							(mist_Vec2) { GUIConfig_ToolbarWidth, GUIConfig_ToolbarHeight }, toolBars, ARRAYSIZE(toolBars));
 	if (selectedTab == Toolbar_Open)
 	{
-		char path[256] = { 0 };
+		char path[1024] = { 0 };
 		if (OpenDialog(path))
 		{
-			// TODO:
+			FILE* file = fopen(path, "rb");
+			fread(&canvas, sizeof(mist_NESCanvas), 1, file);
+			fclose(file);
+
+			canvas.isForeground = !canvas.isForeground;
+			if (canvas.isForeground)
+			{
+				toolBars[Toolbar_IsBackground] = "Foreground";
+			}
+			else
+			{
+				toolBars[Toolbar_IsBackground] = "Background";
+			}
 		}
 	}
 	else if (selectedTab == Toolbar_Save)
 	{
-		char path[256] = { 0 };
+		char path[1024] = { 0 };
 		if (SaveDialog(path))
 		{
-			// TODO:
+			FILE* filePtr = fopen(path, "wb");
+			fwrite(&canvas, sizeof(mist_NESCanvas), 1, filePtr);
+			fclose(filePtr);
 		}
 	}
 	else if (selectedTab == Toolbar_Export)
 	{
-		char path[256] = { 0 };
+		char path[1024] = { 0 };
 		if (SaveDialog(path))
 		{
-			// TODO:
+			// Palette:
+			unsigned int writeHead = 0;
+			#define PALETTE_STRING_SIZE 1024 * 10
+			char paletteString[PALETTE_STRING_SIZE];
+
+			const char* header = "PALETTE_DATA:";
+			memcpy(paletteString, header, strlen(header));
+			writeHead += strlen(header);
+
+			for (unsigned int i = 0; i < 2; i++)
+			{
+				const char* db = "\n\t.db ";
+				memcpy(paletteString + writeHead, db, strlen(db));
+				writeHead += strlen(db);
+
+				for (unsigned int j = 0; j < 15; j++)
+				{
+					writeHead += snprintf(paletteString + writeHead, PALETTE_STRING_SIZE - writeHead, "$%02.2x,", canvas.palette[i][j]);
+				}
+				writeHead += snprintf(paletteString + writeHead, PALETTE_STRING_SIZE - writeHead, "$%02.2x", canvas.palette[i][15]);
+			}
+
+			const char* paletteExtension = ".palette\0";
+			unsigned int extensionPos = strlen(path);
+			memcpy(path + extensionPos, paletteExtension, strlen(paletteExtension) + 1);
+
+			FILE* filePtr = fopen(path, "w");
+			fwrite(paletteString, strlen(paletteString), 1, filePtr);
+			fclose(filePtr);
+
+#define PAGE_SIZE 256 * 2 * 8
+			uint8_t chrData[2 * PAGE_SIZE];
+			for (unsigned int background = 0; background < 2; background++)
+			{
+				for (unsigned int blockY = 0; blockY < 16; blockY++)
+				{
+					for (unsigned int blockX = 0; blockX < 16; blockX++)
+					{
+						unsigned int start = ((15 - blockY) * 16 * 64 + blockX * 8);
+
+						for (unsigned int bitPlane = 0; bitPlane < 2; bitPlane++)
+						{
+							for (unsigned int y = 0; y < 8; y++)
+							{
+								uint8_t row = 0;
+								for (unsigned int x = 0; x < 8; x++)
+								{
+									unsigned int pixel = canvas.pixelCanvas[background][start + (7 - y) * 16 * 8 + x];
+									row |= ((pixel & (1 << bitPlane)) >> bitPlane) << (7 - x);
+								}
+
+								uint16_t index = background << 12 | blockY << 8 | blockX << 4 | bitPlane << 3 | y;
+
+								chrData[index] = row;
+							}
+						}
+					}
+				}
+			}
+
+			const char* patternExtension = ".chr\0";
+			memcpy(path + extensionPos, patternExtension, strlen(patternExtension) + 1);
+
+			filePtr = fopen(path, "wb");
+			fwrite(chrData, ARRAYSIZE(chrData), 1, filePtr);
+			fclose(filePtr);
+		}
+	}
+	else if (selectedTab == Toolbar_IsBackground)
+	{
+		canvas.isForeground = !canvas.isForeground;
+		if (canvas.isForeground)
+		{
+			toolBars[Toolbar_IsBackground] = "Foreground";
+		}
+		else
+		{
+			toolBars[Toolbar_IsBackground] = "Background";
 		}
 	}
 }
@@ -303,8 +420,8 @@ MIST_WIN_PROC(void)
 	#define winConfig_IsFullscreen false
 	#define winConfig_WindowName "Mist Vulkan"
 
-	#define winConfig_Width 900
-	#define winConfig_Height 700
+	#define winConfig_Width 1024
+	#define winConfig_Height 900
 
 	g_VulkanWindow = mist_CreateWindow(winConfig_WindowName, winConfig_IsFullscreen, winConfig_Width, winConfig_Height, mist_WinInstance, WndProc);
 	VkRenderer_Init(mist_WinInstance, g_VulkanWindow, winConfig_Width, winConfig_Height);

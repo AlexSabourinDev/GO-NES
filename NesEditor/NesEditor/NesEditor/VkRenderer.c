@@ -43,7 +43,7 @@ const char*		vkConfig_ValidationLayers[] = { "VK_LAYER_LUNARG_standard_validatio
 #define			vkConfig_VertexBinding 0
 #define			vkConfig_InstanceBinding 1
 
-#define			vkConfig_MaxInstanceCount 10000
+#define			vkConfig_MaxInstanceCount 100000
 
 
 extern void mist_Print(const char* message);
@@ -1759,7 +1759,7 @@ void RecordCommandBuffers(void)
 			VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
 			0, 1, &barrier, 0, NULL, 0, NULL);
 
-		VkClearColorValue clearColor = { .float32 = { 0.0f, 0.0f, 0.0f, 0.0f } };
+		VkClearColorValue clearColor = { .float32 = { 0.05f, 0.05f, 0.05f, 1.0f } };
 		VkClearValue clearValues[1] =
 		{
 			{ .color = clearColor }
@@ -1828,10 +1828,10 @@ void CreateVkMeshes(
 	// Rect
 	mist_VkVertex vertices[] =
 	{
-		{ .position = { -0.5f,  0.5f } },
-		{ .position = { -0.5f, -0.5f } },
-		{ .position = {  0.5f,  0.5f } },
-		{ .position = {  0.5f, -0.5f } }
+		{ .position = {  0.0f,  1.0f } },
+		{ .position = {  0.0f,  0.0f } },
+		{ .position = {  1.0f,  1.0f } },
+		{ .position = {  1.0f,  0.0f } }
 	};
 
 	VkDrawIndirectCommand indirectDraws[VkMesh_Count] = 

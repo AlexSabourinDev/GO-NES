@@ -52,7 +52,7 @@ NMI:
 		STA ppu_fence ; We're done with the PPU submission, clear the fence and allow the game to continue
 	
 		; This is the PPU clean up section, so rendering the next frame starts properly.
-		LDA #%10010000   ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
+		LDA #%10001000   ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
 		STA $2000
 		LDA #%00011110   ; enable sprites, enable background, no clipping on left side
 		STA $2001
