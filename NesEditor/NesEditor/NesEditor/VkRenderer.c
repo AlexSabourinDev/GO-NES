@@ -1090,8 +1090,8 @@ void CreateVkShaders(
 	VkDevice device)
 {
 	mist_Print("Initializing shader...");
-	g_VkShaders[VkShader_DefaultVert] = CreateVkShader(device, "../../Assets/Shaders/SPIR-V/default.vspv");
-	g_VkShaders[VkShader_DefaultFrag] = CreateVkShader(device, "../../Assets/Shaders/SPIR-V/default.fspv");
+	g_VkShaders[VkShader_DefaultVert] = CreateVkShader(device, "Assets/Shaders/SPIR-V/default.vspv");
+	g_VkShaders[VkShader_DefaultFrag] = CreateVkShader(device, "Assets/Shaders/SPIR-V/default.fspv");
 	mist_Print("Shaders intialized!");
 }
 
@@ -1962,7 +1962,7 @@ mist_VkImage InitFont(
 	Font_InitIndices();
 
 	int x, y, n;
-	stbi_uc* imageData = stbi_load("../../Assets/Images/CourierNew.bmp", &x, &y, &n, STBI_rgb_alpha);
+	stbi_uc* imageData = stbi_load("Assets/Images/CourierNew.bmp", &x, &y, &n, STBI_rgb_alpha);
 
 	mist_VkImage image = CreateVkImage(device, physicalDevice, bufferAllocator, imageData, x, y, STBI_rgb_alpha, commandPool, commandQueue);
 

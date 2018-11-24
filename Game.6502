@@ -1,0 +1,850 @@
+
+;;;;;;;;; Vars
+	.rsset $0100
+game_token_x .rs 1   ; 50
+game_token_y .rs 1   ; 51
+game_player  .rs 1   ; 52
+
+game_current_token .rs 1 ; 53
+game_math_temp1    .rs 1 ; 54
+game_math_temp2    .rs 1 ; 55
+game_board_addr    .rs 1 ; 56
+
+game_board_hi      .rs 1 ; 57
+game_board_lo      .rs 1 ; 58
+
+game_get_token_x .rs 1 ; 59
+game_get_token_y .rs 1 ; 60
+
+game_place_token_x .rs 1 ; 61
+game_place_token_y .rs 1 ; 61
+game_place_token_value .rs 1 ; 61
+game_place_token_tile  .rs 1
+
+game_remove_iter .rs 1
+game_captures .rs 2
+
+game_neighbour_list_count .rs 1 ; 62
+game_neighbour_type       .rs 1 ; 63
+game_neighbour_read_iter  .rs 1 ; 64
+game_neighbour_current_x  .rs 1 ; 65
+game_neighbour_current_y  .rs 1 ; 66
+game_neighbour_start_x  .rs 1 ; 67
+game_neighbour_start_y  .rs 1 ; 68
+game_neighbour_list_x   .rs 25 ; 113
+game_neighbour_list_y	.rs 25
+
+game_board   .rs 95
+
+;;;;;;;;; Const
+GAME_PLAYER_1_SPRITE = $00
+GAME_TOKEN_SPRITE    = $00
+GAME_SPRITE_SIZE     = $08
+
+GAME_BOARD_LEFT = $06
+GAME_BOARD_RIGHT = $19
+GAME_BOARD_TOP = $05
+GAME_BOARD_BOTTOM = $18
+
+GAME_WHITE_SCORE_HI = $23
+GAME_WHITE_SCORE_LO = $26
+
+GAME_BLACK_SCORE_HI = $23
+GAME_BLACK_SCORE_LO = $06
+
+	.macro GAME_HANDLE_INPUT
+		LDA engine_input
+		AND \1
+		BEZ GAME_INPUT_DONE\@
+			LDA engine_prev_input
+			AND \1
+			BNZ GAME_INPUT_DONE\@
+
+			LDX \2
+			\3
+
+			CPX #$13
+			BCS GAME_INPUT_DONE\@
+			STX \2
+		GAME_INPUT_DONE\@:
+	.endm
+
+game_Init:
+	LDA #$00
+	STA game_token_x
+	LDA #$00
+	STA game_token_y
+
+	LDA #$00
+	LDX #$00
+	ZERO_BOARD:
+		STA game_board, X
+		INX
+		CPX #91
+		BNE ZERO_BOARD
+
+	LDA #$00
+	STA game_player
+
+	; Load Palette
+	LDA PPU_STATUS_REG    ; read PPU status to reset the high/low latch
+	LDA #PPU_IMAGE_PALETTE_HI
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the high byte of $3F00 address
+	LDA #PPU_IMAGE_PALETTE_LO
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the low byte of $3F00 address
+	
+	LDX #$00
+	LOAD_PALETTE_LOOP:
+		LDA PALETTE_DATA, X
+		STA PPU_VIDEO_RAM_IO_REG               ; write to PPU
+		INX
+		CPX #$20
+		BNE LOAD_PALETTE_LOOP
+
+	LDA PPU_STATUS_REG    ; read PPU status to reset the high/low latch
+	LDA #PPU_ATTRIBUTES_HI
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the high byte of $3F00 address
+	LDA #PPU_ATTRIBUTES_LO
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the low byte of $3F00 address
+
+	LDA #$00
+	LDX #$FF
+	LOAD_NAMETABLE_LOOP:
+		STA PPU_VIDEO_RAM_IO_REG ; Store 4 bytes per loop since we can't loop 1024 times
+		STA PPU_VIDEO_RAM_IO_REG
+		STA PPU_VIDEO_RAM_IO_REG
+		STA PPU_VIDEO_RAM_IO_REG
+		DEX
+		BNZ LOAD_NAMETABLE_LOOP
+
+	LDA #$00
+	LDX #$20
+	LOAD_ATTRIBUTES_LOOP:
+		STA PPU_VIDEO_RAM_IO_REG
+		DEX
+		BNZ LOAD_ATTRIBUTES_LOOP
+
+	JSR game_InitFeedBackground
+
+	RTS
+
+; game_place_token_y
+; game_place_token_x
+; game_place_token_value
+game_PlaceToken:
+	LDA game_place_token_y
+	
+	; Mul by 5
+	SHL A
+	SHL A
+	ADD game_place_token_y
+	STA game_math_temp1
+
+	LDA game_place_token_x
+	; Div by 4
+	SHR A
+	SHR A
+
+	; Add our Y to our X
+	ADD game_math_temp1
+	TAX
+	LDA game_board, X
+	STA game_current_token
+	STX game_board_addr
+
+	LDA game_place_token_x
+	SHR A
+	SHR A
+	SHL A
+	SHL A
+
+	STA game_math_temp1
+	LDA game_place_token_x
+
+	SUB game_math_temp1 ; Get the offset
+	STA game_math_temp2
+
+	TAX
+	TAY ; Move to Y for later
+	LDA #$03
+
+	CPX #$00
+	SHIFT_MASK_UP:
+		BEZ SHIFT_MASK_DONE
+		SHL A
+		SHL A
+		DEX
+		JMP SHIFT_MASK_UP
+	SHIFT_MASK_DONE:
+
+
+	EOR #$FF
+	AND game_current_token
+	STA game_math_temp1
+
+	LDA game_place_token_value
+
+	CPY #$00
+	SHIFT_VALUE_UP:
+		BEZ SHIFT_VALUE_DONE
+		SHL A
+		SHL A
+		DEY
+		JMP SHIFT_VALUE_UP
+	SHIFT_VALUE_DONE:
+
+	ORA game_math_temp1
+	LDX game_board_addr
+	STA game_board, X
+
+	; Update the nametable at the appropriate location
+	LDA #$20
+	STA game_board_hi
+	LDA #$00
+	STA game_board_lo
+
+	LDA game_place_token_y
+	ADD #GAME_BOARD_TOP
+
+	TAX
+	NAMETABLE_Y_ADD:
+		LDA game_board_lo
+		ADD #$20
+		STA game_board_lo
+
+		LDA game_board_hi
+		ADC #$00
+		STA game_board_hi
+
+		DEX
+		BNZ NAMETABLE_Y_ADD
+
+	LDA game_board_lo
+	ADD game_place_token_x
+	ADD #GAME_BOARD_LEFT
+	STA game_board_lo
+
+	LDA game_place_token_tile
+	LDX game_board_hi
+	LDY game_board_lo
+	JSR ppu_AddCommand
+
+	RTS
+
+; X, Y = coordinates
+; A = result
+game_GetToken:
+	STY game_get_token_y
+	TYA
+	
+	; Mul by 5
+	SHL A
+	SHL A
+	ADD game_get_token_y
+	STA game_math_temp1
+
+	STX game_get_token_x
+	TXA
+	; Div by 4
+	SHR A
+	SHR A
+
+	; Add our Y to our X
+	ADD game_math_temp1
+	TAX
+	LDA game_board, X
+	STA game_current_token
+	STX game_board_addr
+
+	LDA game_get_token_x
+	SHR A
+	SHR A
+	SHL A
+	SHL A
+
+	STA game_math_temp1
+	LDA game_get_token_x
+
+	SUB game_math_temp1 ; Get the offset
+	STA game_math_temp2
+
+	TAX
+	TAY ; Move to Y for later
+	LDA #$03
+
+	CPX #$00
+	SHIFT_GET_MASK_UP:
+		BEZ SHIFT_GET_MASK_DONE
+		SHL A
+		SHL A
+		DEX
+		JMP SHIFT_GET_MASK_UP
+	SHIFT_GET_MASK_DONE:
+
+	AND game_current_token
+
+	CPY #$00
+	SHIFT_GET_VALUE_DOWN:
+		BEZ SHIFT_GET_VALUE_DONE
+		SHR A
+		SHR A
+		DEY
+		JMP SHIFT_GET_VALUE_DOWN
+	SHIFT_GET_VALUE_DONE:
+	RTS
+
+; X, Y position of cell to check
+; A = Liberty found
+game_SearchLiberties:
+	CPX #$13
+	BCC SEARCH_INPUT_FINE
+	RTS
+
+	CPY #$13
+	BCC SEARCH_INPUT_FINE
+	RTS
+
+	SEARCH_INPUT_FINE:
+	
+	STX game_neighbour_current_x
+	STY game_neighbour_current_y
+
+	TXA
+	LDX #$00
+	STA game_neighbour_list_x, X
+	TYA
+	STA game_neighbour_list_y, X
+	INX
+	STX game_neighbour_list_count
+
+	LDX game_neighbour_current_x
+	LDY game_neighbour_current_y
+	JSR game_GetToken
+	STA game_neighbour_type
+
+	LDX #$00
+	STX game_neighbour_read_iter
+	SEARCH_LIBERTIES_LOOP:
+		LDX game_neighbour_read_iter
+		CPX game_neighbour_list_count
+		BEQ SEARCH_LIBERTIES_LOOP_DONE
+
+		LDA game_neighbour_list_x, X
+		STA game_neighbour_current_x
+		LDA game_neighbour_list_y, X
+		STA game_neighbour_current_y
+
+		LDX game_neighbour_current_x
+		LDY game_neighbour_current_y
+
+		STX game_neighbour_start_x
+		STY game_neighbour_start_y
+
+		; Look left
+		DEX
+		STX game_neighbour_current_x
+		STY game_neighbour_current_y
+		JSR game_SearchLibertiesLook
+		CMP #$00
+		BNE SEARCH_LIBERTIES_FOUND
+
+		; Look right
+		LDX game_neighbour_start_x
+		LDY game_neighbour_start_y
+		INX
+		STX game_neighbour_current_x
+		STY game_neighbour_current_y
+		JSR game_SearchLibertiesLook
+		CMP #$00
+		BNE SEARCH_LIBERTIES_FOUND
+
+		; Look up
+		LDX game_neighbour_start_x
+		LDY game_neighbour_start_y
+		DEY
+		STX game_neighbour_current_x
+		STY game_neighbour_current_y
+		JSR game_SearchLibertiesLook
+		CMP #$00
+		BNE SEARCH_LIBERTIES_FOUND
+
+		; Look down
+		LDX game_neighbour_start_x
+		LDY game_neighbour_start_y
+		INY
+		STX game_neighbour_current_x
+		STY game_neighbour_current_y
+		JSR game_SearchLibertiesLook
+		CMP #$00
+		BNE SEARCH_LIBERTIES_FOUND
+		
+		SEARCH_LIBERTIES_JMP:
+		LDX game_neighbour_read_iter
+		INX
+		STX game_neighbour_read_iter
+		JMP SEARCH_LIBERTIES_LOOP
+
+		SEARCH_LIBERTIES_FOUND:
+		LDA #$01
+		RTS
+
+	SEARCH_LIBERTIES_LOOP_DONE:
+	LDA #$00
+	RTS
+
+; Inner jump instead of writing another routine
+game_SearchLibertiesLook:
+	LDX game_neighbour_current_x
+	LDY game_neighbour_current_y
+
+	CPX #$13
+	BCS SEARCH_LIBERTIES_LOOK_DONE
+	CPY #$13
+	BCS SEARCH_LIBERTIES_LOOK_DONE
+
+	JSR game_GetToken
+	CMP #$00
+	BEQ SEARCH_LIBERTIES_LOOK_FOUND
+
+	CMP game_neighbour_type
+	BNE SEARCH_LIBERTIES_LOOK_DONE
+
+	SEARCH_LIBERTIES_ADD:
+
+	; Look through the list to make sure it's not in there
+	LDX #$00
+	SEARCH_LIST_LOOP:
+		LDA game_neighbour_list_x, X
+		CMP game_neighbour_current_x
+		BNE SEARCH_LIST_KEEP_LOOKING
+
+		LDA game_neighbour_list_y, X
+		CMP game_neighbour_current_y
+		BEQ SEARCH_LIBERTIES_LOOK_DONE
+
+		SEARCH_LIST_KEEP_LOOKING:
+		INX
+		CPX game_neighbour_list_count
+		BNE SEARCH_LIST_LOOP
+
+	LDA game_neighbour_current_x
+	STA game_neighbour_list_x, X
+	LDA game_neighbour_current_y
+	STA game_neighbour_list_y, X
+	INX
+	STX game_neighbour_list_count
+	
+	SEARCH_LIBERTIES_LOOK_DONE:
+	LDA #$00
+	RTS
+
+	SEARCH_LIBERTIES_LOOK_FOUND:
+	LDA #$01
+	RTS
+
+game_RemoveTokens:
+	LDX #$00
+	REMOVE_TOKEN_LOOK:
+		STX game_remove_iter
+
+		LDA game_neighbour_list_x, X
+		STA game_place_token_x
+		LDA game_neighbour_list_y, X
+		STA game_place_token_y
+
+		LDA #$03
+		; Y edges
+		LDY game_place_token_y
+		CPY #$00
+		BEQ REMOVE_EDGE_DONE
+		CPY #$12
+		BEQ REMOVE_BOTTOM_EDGE
+		
+		REMOVE_NO_EDGE:
+		LDA #$09
+		JMP REMOVE_EDGE_DONE
+		
+		REMOVE_BOTTOM_EDGE:
+		LDA #$06
+		
+		REMOVE_EDGE_DONE:
+
+		; X edges
+		LDX game_place_token_x
+		CPX #$00
+		BEQ REMOVE_LEFT_EDGE
+		CPX #$12
+		BEQ REMOVE_RIGHT_EDGE
+		
+		REMOVE_X_NO_EDGE:
+		ADD #$01
+		JMP REMOVE_X_EDGE_DONE
+		
+		REMOVE_LEFT_EDGE:
+		JMP REMOVE_X_EDGE_DONE
+
+		REMOVE_RIGHT_EDGE:
+		ADD #$02
+		
+		REMOVE_X_EDGE_DONE:
+
+		STA game_place_token_tile
+		LDA #$00
+		STA game_place_token_value
+
+		TXA
+		PHA
+		LDX game_place_token_x
+		LDY game_place_token_y
+		JSR game_GetToken
+		
+		TAX
+		DEX
+		LDA game_captures, X
+		ADD #$01
+		STA game_captures, X
+
+		JSR game_PlaceToken
+		PLA
+		TAX
+
+		LDX game_remove_iter
+		INX
+		CPX game_neighbour_list_count
+		BNE REMOVE_TOKEN_LOOK
+	RTS
+
+game_Input:
+	GAME_HANDLE_INPUT #BUTTON_LEFT, game_token_x, DEX
+	GAME_HANDLE_INPUT #BUTTON_RIGHT, game_token_x, INX
+	GAME_HANDLE_INPUT #BUTTON_UP, game_token_y, DEX
+	GAME_HANDLE_INPUT #BUTTON_DOWN, game_token_y, INX
+
+	GAME_X_BOUNDS_DONE:
+	GAME_Y_BOUNDS_DONE:
+
+	LDA engine_input
+	AND #BUTTON_A
+	BNZ A_PRESSED
+	RTS
+	
+	A_PRESSED:
+		LDA engine_prev_input
+		AND #BUTTON_A
+		BEZ A_JUST_PRESSED
+		RTS
+
+		A_JUST_PRESSED:
+
+		LDX game_token_x
+		LDY game_token_y
+		JSR game_GetToken
+		CMP #$00
+		BEQ TOKEN_FOUND
+		RTS
+
+		TOKEN_FOUND:
+
+		LDA game_player
+		ADD #$01
+		STA game_place_token_value
+		STA game_place_token_tile
+
+		LDX game_token_x
+		LDY game_token_y
+		STX game_place_token_x
+		STY game_place_token_y
+
+		JSR game_PlaceToken
+		
+		LDX game_token_x
+		LDY game_token_y
+		JSR game_SearchLiberties
+		CMP #$00
+		BNE CENTER_REMOVE_DONE
+		JSR game_RemoveTokens
+		CENTER_REMOVE_DONE:
+
+		LDX game_token_x
+		LDY game_token_y
+		DEX
+		JSR game_SearchLiberties
+		CMP #$00
+		BNE LEFT_REMOVE_DONE
+		JSR game_RemoveTokens
+		LEFT_REMOVE_DONE:
+
+		LDX game_token_x
+		LDY game_token_y
+		INX
+		JSR game_SearchLiberties
+		CMP #$00
+		BNE RIGHT_REMOVE_DONE
+		JSR game_RemoveTokens
+		RIGHT_REMOVE_DONE:
+
+		LDX game_token_x
+		LDY game_token_y
+		DEY
+		JSR game_SearchLiberties
+		CMP #$00
+		BNE UP_REMOVE_DONE
+		JSR game_RemoveTokens
+		UP_REMOVE_DONE:
+
+		LDX game_token_x
+		LDY game_token_y
+		INY
+		JSR game_SearchLiberties
+		CMP #$00
+		BNE DOWN_REMOVE_DONE
+		JSR game_RemoveTokens
+		DOWN_REMOVE_DONE:
+
+		JSR game_FeedScores
+
+		LDA game_player
+		ADD #$01
+		AND #$01
+		STA game_player
+	PLACE_DONE:
+	RTS
+
+game_FeedScores:
+	LDX #$00
+	LDA game_captures, X
+	JSR help_Div10
+
+	TYA
+	ADD #$10
+	LDX #GAME_WHITE_SCORE_HI
+	LDY #GAME_WHITE_SCORE_LO
+	INY
+	INY
+	INY
+	JSR ppu_AddCommand
+
+	LDX #$00
+	LDA game_captures, X
+	JSR help_Div10
+	TXA
+	JSR help_Div10
+
+	TYA
+	ADD #$10
+	LDX #GAME_WHITE_SCORE_HI
+	LDY #GAME_WHITE_SCORE_LO
+	INY
+	INY
+	JSR ppu_AddCommand
+
+	LDX #$00
+	LDA game_captures, X
+	JSR help_Div10
+	TXA
+	JSR help_Div10
+	TXA
+	JSR help_Div10
+
+	TYA
+	ADD #$10
+	LDX #GAME_WHITE_SCORE_HI
+	LDY #GAME_WHITE_SCORE_LO
+	INY
+	JSR ppu_AddCommand
+
+	LDX #$01
+	LDA game_captures, X
+	JSR help_Div10
+
+	TYA
+	ADD #$10
+	LDX #GAME_BLACK_SCORE_HI
+	LDY #GAME_BLACK_SCORE_LO
+	INY
+	INY
+	INY
+	JSR ppu_AddCommand
+
+	LDX #$01
+	LDA game_captures, X
+	JSR help_Div10
+	TXA
+	JSR help_Div10
+
+	TYA
+	ADD #$10
+	LDX #GAME_BLACK_SCORE_HI
+	LDY #GAME_BLACK_SCORE_LO
+	INY
+	INY
+	JSR ppu_AddCommand
+
+	LDX #$01
+	LDA game_captures, X
+	JSR help_Div10
+	TXA
+	JSR help_Div10
+	TXA
+	JSR help_Div10
+
+	TYA
+	ADD #$10
+	LDX #GAME_BLACK_SCORE_HI
+	LDY #GAME_BLACK_SCORE_LO
+	INY
+	JSR ppu_AddCommand
+	RTS
+
+game_FeedSprites:
+	LDA game_token_y
+	ADD #GAME_BOARD_TOP
+	ASL A
+	ASL A
+	ASL A
+	SUB #$01
+	STA $0200
+	LDA game_token_x
+	ADD #GAME_BOARD_LEFT
+	ASL A
+	ASL A
+	ASL A
+	STA $0203
+	LDA #GAME_PLAYER_1_SPRITE
+	ADD game_player
+  	STA $0201
+	LDA #$00
+  	STA $0202
+	RTS
+
+game_InitFeedBackground:
+	LDA PPU_STATUS_REG    ; read PPU status to reset the high/low latch
+	LDA	#PPU_NAMETABLE_HI
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the high byte of $3F00 address
+	LDA #PPU_NAMETABLE_LO
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the low byte of $3F00 address
+
+	LDY #$00
+	; Loop
+	BOARD_DRAW_Y:
+		LDA #$03
+
+		CPY #GAME_BOARD_TOP
+		BEQ BOARD_ROW_DONE ; If we're the top row, we want to just stay at A = $03
+		CPY #GAME_BOARD_BOTTOM - 1
+		BEQ BOARD_ADD_ROW
+
+		; We're in the middle, move one more so that ADD_ROW will make it to #$09
+		ADD #$03
+
+		BOARD_ADD_ROW:
+		ADD #$03 ; Bottom tiles
+		BOARD_ROW_DONE:
+
+		STA game_math_temp1
+
+		BOARD_DRAW_X_LOOP_START:
+		LDX #$00
+		; Loop
+		BOARD_DRAW_X:
+			LDA game_math_temp1
+
+			CPY #GAME_BOARD_BOTTOM
+			BCS BOARD_DRAW_BLANK_TILE
+			CPX #GAME_BOARD_RIGHT
+			BCS BOARD_DRAW_BLANK_TILE
+			
+			CPY #GAME_BOARD_TOP
+			BCC BOARD_DRAW_BLANK_TILE
+			CPX #GAME_BOARD_LEFT
+			BCC BOARD_DRAW_BLANK_TILE
+			JMP BOARD_DRAW_TILE_X
+
+			BOARD_DRAW_BLANK_TILE:
+			LDA #$00
+			STA PPU_VIDEO_RAM_IO_REG
+			JMP BOARD_DRAW_INC_X
+
+			BOARD_DRAW_TILE_X:
+			CPX #GAME_BOARD_LEFT
+			BEQ BOARD_TILE_DONE ; If we're the left side, we do nothing
+			CPX #GAME_BOARD_RIGHT - 1
+			BNE BOARD_ADD_TILE
+			
+			; We're on the right, we want to add 1 to the tile index
+			ADD #$01
+
+			BOARD_ADD_TILE:
+			ADD #$01
+			BOARD_TILE_DONE:
+
+			STA PPU_VIDEO_RAM_IO_REG
+
+			BOARD_DRAW_INC_X:
+			INX
+			CPX #$20
+			BNE BOARD_DRAW_X
+
+		BOARD_DRAW_INC_Y:
+		INY
+		CPY #$20
+		BNE BOARD_DRAW_Y
+
+	LDA PPU_STATUS_REG    ; read PPU status to reset the high/low latch
+	LDA	#GAME_WHITE_SCORE_HI
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the high byte of $3F00 address
+	LDA #GAME_WHITE_SCORE_LO
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the low byte of $3F00 address
+	LDA #$01
+	STA PPU_VIDEO_RAM_IO_REG
+
+	LDA PPU_STATUS_REG    ; read PPU status to reset the high/low latch
+	LDA	#GAME_BLACK_SCORE_HI
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the high byte of $3F00 address
+	LDA #GAME_BLACK_SCORE_LO
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the low byte of $3F00 address
+	LDA #$02
+	STA PPU_VIDEO_RAM_IO_REG
+
+	JSR game_FeedScores
+	RTS
+	
+game_Tick:
+	JSR game_Input
+	JSR game_FeedSprites
+	RTS
+
+; A = Value
+; X = Factor, Y = Modulo
+help_Div10:
+	LDX #$00
+	DIVIDE_LOOP:
+		CMP #$0A
+		BCC DIVIDE_DONE
+		SUB #$0A
+		INX
+		JMP DIVIDE_LOOP
+	DIVIDE_DONE:
+	TAY
+	RTS
+
+;;;;;;;
+	.bank 1
+	.org $E000
+	.include "NESGO.palette"   ;includes the palettexc
+	
+	
+	
+SPRITES:
+    ;   vert tile attr horiz
+	.db $80, $00, $00, $80   ;sprite 0
+	.db $80, $01, $00, $88   ;sprite 1
+	.db $88, $10, $00, $80   ;sprite 2
+	.db $88, $11, $00, $88   ;sprite 3
+	
+POSITIONS_X:
+	.db $80, $30, $05, $20
+
+POSITIONS_Y:
+	.db $80, $10, $A0, $30
+	

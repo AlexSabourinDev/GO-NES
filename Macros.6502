@@ -25,11 +25,21 @@
 		STA \1
 		PLA
 	.endm
+
+	.macro SHR
+		CLC
+		ROR \1
+	.endm
+
+	.macro SHL
+		CLC
+		ROL \1
+	.endm
 	
 	.macro ABS
 		BIT #%10000000
-		BEZ ABS_DONE@
-		EOR #$FF
-		ABS_DONE@:
+		BEZ ABS_DONE\@
+			EOR #$FF
+		ABS_DONE\@:
 	.endm
 	

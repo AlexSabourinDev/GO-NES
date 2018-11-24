@@ -1,0 +1,105 @@
+;-
+; Everything related to interfacing with the PPU goes here
+;-
+
+	.rsset $0010
+ppu_command_count  .rs 1 ; 11
+ppu_commands_hi    .rs 20 ; 42
+ppu_commands_lo    .rs 20 ; 72
+ppu_commands_value .rs 20 ; 102
+ppu_temp_command_hi   .rs 1 ; 43
+ppu_temp_command_lo   .rs 1 ; 44
+ppu_temp_command_value .rs 1 ; 45
+
+; Wait for the VBlamk
+ppu_VBlankWait:
+	BIT PPU_STATUS_REG
+	BPL ppu_VBlankWait
+	RTS
+
+; A = value, X = hi, Y = lo
+ppu_AddCommand:
+	STX ppu_temp_command_hi
+	STY ppu_temp_command_lo
+	STA ppu_temp_command_value
+
+	LDX ppu_command_count
+	LDA ppu_temp_command_hi
+	STA ppu_commands_hi, X
+	LDA ppu_temp_command_lo
+	STA ppu_commands_lo, X
+	LDA ppu_temp_command_value
+	STA ppu_commands_value, X
+
+	INX
+	STX ppu_command_count
+
+	RTS
+
+ppu_ProcessCommands:
+	LDX ppu_command_count
+	CPX #$00
+	BEZ COMMANDS_CONSUMED
+
+	LDX #$00
+	CONSUME_COMMANDS:
+		LDA PPU_STATUS_REG
+		LDA	ppu_commands_hi, X
+		STA PPU_VIDEO_RAM_ADDRESS_REG_2
+		LDA ppu_commands_lo, X
+		STA PPU_VIDEO_RAM_ADDRESS_REG_2
+		LDA ppu_commands_value, X
+		STA PPU_VIDEO_RAM_IO_REG
+
+		INX
+		CPX ppu_command_count
+		BNZ CONSUME_COMMANDS
+
+	LDA #$00
+	STA ppu_command_count
+
+	COMMANDS_CONSUMED:
+	RTS
+
+ppu_SetPPUState:
+	; This is the PPU clean up section, so rendering the next frame starts properly.
+	LDA #%10001000   ; enable NMI, sprites from Pattern Table 0, background from Pattern Table 1
+	STA PPU_CONTROL_REG_1
+	LDA #%00011110   ; enable sprites, enable background, no clipping on left side
+	STA PPU_CONTROL_REG_2
+	LDA #$00        ;;tell the ppu there is no background scrolling
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2
+	STA PPU_VIDEO_RAM_ADDRESS_REG_2
+	STA PPU_VIDEO_RAM_ADDRESS_REG_1
+	STA PPU_VIDEO_RAM_ADDRESS_REG_1
+	RTS
+
+ppu_Init:
+	JSR ppu_SetPPUState
+	RTS
+	
+; NMI interupt
+NMI:
+	; Save all of our register states, we'll need them when we return from the interupt
+	PHA
+	TXA
+	PHA
+	TYA
+	PHA
+
+	PPU_DMA:
+		LDA #SPRITE_DMA_REGION_LO
+		STA PPU_STATUS_REG  ; set the low byte (00) of the RAM address
+		LDA #SPRITE_DMA_REGION_HI
+		STA PPU_SPRITE_DMA  ; set the high byte (02) of the RAM address, start the transfer
+
+	JSR ppu_ProcessCommands
+	JSR ppu_SetPPUState
+		
+	PLA
+	TAY
+	PLA
+	TAX
+	PLA
+	
+	RTI

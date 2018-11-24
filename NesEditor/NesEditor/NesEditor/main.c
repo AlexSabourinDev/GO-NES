@@ -396,7 +396,7 @@ void Input_Refresh(void)
 	g_MouseState = g_MouseState == MouseState_Up ? MouseState_None : g_MouseState;
 }
 
-#define SHOW_CONSOLE 1
+#define SHOW_CONSOLE 0
 
 #if SHOW_CONSOLE
 #define MIST_WIN_PROC(void) \
@@ -414,6 +414,10 @@ MIST_WIN_PROC(void)
 {
 #if SHOW_CONSOLE
 	HINSTANCE mist_WinInstance = GetModuleHandle(NULL);
+#else
+	(void)prevInstance;
+	(void)args;
+	(void)moreArgs;
 #endif
 
 	// Config
