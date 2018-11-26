@@ -297,11 +297,15 @@ game_GetToken:
 ; A = Liberty found
 game_SearchLiberties:
 	CPX #$13
-	BCC SEARCH_INPUT_FINE
+	BCC SEARCH_X_FINE
+	LDA #$01
 	RTS
+
+	SEARCH_X_FINE:
 
 	CPY #$13
 	BCC SEARCH_INPUT_FINE
+	LDA #$01
 	RTS
 
 	SEARCH_INPUT_FINE:
@@ -427,6 +431,7 @@ game_SearchLibertiesLook:
 		CPX game_neighbour_list_count
 		BNE SEARCH_LIST_LOOP
 
+	LDX game_neighbour_list_count
 	LDA game_neighbour_current_x
 	STA game_neighbour_list_x, X
 	LDA game_neighbour_current_y
@@ -795,7 +800,7 @@ game_InitFeedBackground:
 	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the high byte of $3F00 address
 	LDA #GAME_WHITE_SCORE_LO
 	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the low byte of $3F00 address
-	LDA #$01
+	LDA #$02
 	STA PPU_VIDEO_RAM_IO_REG
 
 	LDA PPU_STATUS_REG    ; read PPU status to reset the high/low latch
@@ -803,7 +808,7 @@ game_InitFeedBackground:
 	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the high byte of $3F00 address
 	LDA #GAME_BLACK_SCORE_LO
 	STA PPU_VIDEO_RAM_ADDRESS_REG_2    ; write the low byte of $3F00 address
-	LDA #$02
+	LDA #$01
 	STA PPU_VIDEO_RAM_IO_REG
 
 	JSR game_FeedScores
