@@ -561,14 +561,6 @@ game_Input:
 		STY game_place_token_y
 
 		JSR game_PlaceToken
-		
-		LDX game_token_x
-		LDY game_token_y
-		JSR game_SearchLiberties
-		CMP #$00
-		BNE CENTER_REMOVE_DONE
-		JSR game_RemoveTokens
-		CENTER_REMOVE_DONE:
 
 		LDX game_token_x
 		LDY game_token_y
@@ -605,6 +597,14 @@ game_Input:
 		BNE DOWN_REMOVE_DONE
 		JSR game_RemoveTokens
 		DOWN_REMOVE_DONE:
+
+		LDX game_token_x
+		LDY game_token_y
+		JSR game_SearchLiberties
+		CMP #$00
+		BNE CENTER_REMOVE_DONE
+		JSR game_RemoveTokens
+		CENTER_REMOVE_DONE:
 
 		JSR game_FeedScores
 
